@@ -1,6 +1,6 @@
 {
   "name": "declarenta",
-  "version": "0.58.23",
+  "version": "0.58.24",
   "description": "Open-source tool to convert foreign broker reports (IBKR, Degiro, Scalable Capital, eToro, Freedom24) into Spanish tax declarations (Modelo 100, 720, D-6). Browser-first, privacy-focused.",
   "type": "module",
   "main": "./dist/index.js",
@@ -81,7 +81,7 @@
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
-    "@types/node": "^22.20.2",
+    "@types/node": "^22.20.3",
     "@types/pdfkit": "^0.17.6",
     "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^9.39.5",
