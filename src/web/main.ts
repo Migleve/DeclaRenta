@@ -5,16 +5,17 @@
  * All processing happens in the browser. No data is uploaded anywhere.
  */
 
-import { detectBroker, getBroker, brokerParsers } from "../parsers/index.js";
+import { detectBroker, getBroker } from "../parsers/index.js";
 import { parseEtoroXlsx, detectEtoroXlsx } from "../parsers/etoro.js";
 import { parseRevolutXlsx, detectRevolutXlsx } from "../parsers/revolut.js";
 import type { Statement } from "../types/broker.js";
-import type { TaxSummary } from "../types/tax.js";
+import type { ReportSettings, TaxSummary } from "../types/tax.js";
 import type { EcbRateMap } from "../types/ecb.js";
 import { buildEcbRateMap } from "../engine/ecb-orchestrator.js";
 import { computeTaxableBaseBreakdown } from "../engine/taxable-base.js";
 import { generateTaxReport } from "../generators/report.js";
-import { formatCsv } from "../generators/csv.js";
+import { csvDownload } from "./csv-download.js";
+import { formatReportSettings, reportSettingsDiffer } from "../generators/report-settings.js";
 import { serializeFxTrace } from "../generators/fx-trace.js";
 import { normalizeDate } from "../engine/dates.js";
 import { openDisclaimer } from "./disclaimer.js";
@@ -29,7 +30,7 @@ import { renderCasillaCards } from "./casilla-detail.js";
 import { persistReport, renderYearComparison } from "./year-compare.js";
 import { initWizard, goToStep, onStepChange, unlockStep, type WizardStep } from "./wizard.js";
 import { initSidebar, updateBadge } from "./sidebar.js";
-import { initProfile, getProfile, saveProfile } from "./profile.js";
+import { initProfile, getProfile, saveProfile, type FiscalProfile } from "./profile.js";
 import { initBrokerGuides, getSelectedBrokerIds, BROKER_ID_TO_PARSER } from "./broker-guides.js";
 import { resolveDetection, DETECTION_ERROR } from "./detection-cache.js";
 import { esc } from "./esc.js";
@@ -44,21 +45,82 @@ import {
 import { initSection720, renderSection720, rerenderSection720 } from "./section-720.js";
 import { initSection721, renderSection721, rerenderSection721 } from "./section-721.js";
 import { initSectionD6, renderSectionD6, rerenderSectionD6 } from "./section-d6.js";
+import { findMissingHoldings, type MissingHoldings, type ParsedExport } from "./missing-holdings.js";
 import { initSectionGuide, rerenderSectionGuide } from "./section-guide.js";
 import { t, initLocale, setLocale, getCurrentLocale, getLocaleNames, type Locale } from "../i18n/index.js";
 import { validateStatement, renderValidationIssues } from "./validation.js";
+import { pickDefaultYear, renderNewerYearsNotice } from "./year-default.js";
 import { renderOperationsAnnex } from "./operations-annex.js";
-import { createEmptyStatement, finalizeMergedStatement, mergeStatement } from "../parsers/merge.js";
-import { fmtEur } from "./format.js";
+import { washSaleRowAttr, renderWashSaleDetailRow } from "./wash-sale-row.js";
+import { createEmptyStatement, finalizeMergedStatement, mergeStatement, yearEndHoldings } from "../parsers/merge.js";
+import { fmtEur, fmtQty, formatDate } from "./format.js";
 import Decimal from "decimal.js";
 
 Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
 
 // ---------------------------------------------------------------------------
+// Splash screen
+// ---------------------------------------------------------------------------
+// Wired before the locale table is awaited below. A top-level await does not
+// hold back the page's load event, so a start click can land while the table
+// is still loading; the button needs no translation, so it is wired first.
+
+const splash = document.getElementById("splash");
+const splashCta = document.getElementById("splash-cta");
+
+function dismissSplash() {
+  if (!splash) return;
+  splash.classList.add("splash-exit");
+  // The exit animation (style.css .splash-exit) lasts 0.45 s. A browser that
+  // does not run it (reduced motion, a hidden tab, headless under load) never
+  // fires animationend, so a timer finishes the dismissal in either case.
+  // A splash reopened from the logo meanwhile has lost .splash-exit: leave it.
+  let done = false;
+  // The logo and content run their own animations, whose end events bubble up
+  // here, so the listeners stay until the splash's own event or the timer.
+  const onSplashAnimation = (e: AnimationEvent) => {
+    if (e.target === splash) finish();
+  };
+  const finish = () => {
+    if (done) return;
+    done = true;
+    splash.removeEventListener("animationend", onSplashAnimation);
+    splash.removeEventListener("animationcancel", onSplashAnimation);
+    if (!splash.classList.contains("splash-exit")) return;
+    splash.style.display = "none";
+    document.body.classList.remove("splash-visible");
+  };
+  splash.addEventListener("animationend", onSplashAnimation);
+  splash.addEventListener("animationcancel", onSplashAnimation);
+  setTimeout(finish, 600);
+}
+
+function showSplash() {
+  if (!splash) return;
+  splash.style.display = "";
+  splash.classList.remove("splash-exit");
+  document.body.classList.add("splash-visible");
+}
+
+if (splash) {
+  splashCta?.addEventListener("click", dismissSplash);
+  document.body.classList.add("splash-visible");
+}
+
+// Logo/brand click → show splash (but not hamburger)
+document.querySelector(".top-bar-brand")?.addEventListener("click", (e) => {
+  if ((e.target as HTMLElement).closest("#sidebar-toggle")) return;
+  e.preventDefault();
+  showSplash();
+});
+
+// ---------------------------------------------------------------------------
 // i18n initialization
 // ---------------------------------------------------------------------------
 
-initLocale();
+// Wait for the saved or detected locale's table, so the first render is
+// already in that language.
+await initLocale();
 
 /** Update all static elements with data-i18n attributes */
 function updateStaticText() {
@@ -93,11 +155,40 @@ for (const [code, name] of Object.entries(localeNames)) {
 }
 
 langSelect.addEventListener("change", () => {
-  setLocale(langSelect.value as Locale);
+  setLocale(langSelect.value as Locale).catch(() => {
+    // The locale could not load (offline, missing chunk): keep the selector on
+    // the language still in use.
+    langSelect.value = getCurrentLocale();
+  });
 });
+
+// Recalculate when a profile setting that changes the figures is edited
+// (monodivisa, titulares, auto-conversions) while results are on screen. The
+// other fields (NIF, name, phone...) do not change the Modelo 100 figures, so
+// typing them never re-runs the engine.
+document.addEventListener("profilechange", (e) => {
+  if (!currentReport || !mergedStatement || !lastRunSettings) return;
+  const next = settingsFromProfile((e as CustomEvent<FiscalProfile>).detail);
+  if (reportSettingsDiffer(lastRunSettings, next)) rerunWithOverlay();
+});
+
+/**
+ * Re-run the report from the Results step with the same processing overlay the
+ * wizard shows, so the old figures are covered until the new ones are drawn.
+ */
+function rerunWithOverlay(): void {
+  const overlay = document.createElement("div");
+  overlay.className = "processing-overlay";
+  overlay.innerHTML = `<div class="processing-spinner"></div><span class="processing-text">${t("config.processing")}</span>`;
+  document.getElementById("wizard-step-3")?.appendChild(overlay);
+  void processFiles().finally(() => {
+    overlay.remove();
+  });
+}
 
 document.addEventListener("localechange", () => {
   updateStaticText();
+  renderFileList();
   if (currentReport) renderResults(currentReport);
   rerenderSection720();
   rerenderSection721();
@@ -105,48 +196,10 @@ document.addEventListener("localechange", () => {
   rerenderSectionGuide();
   initProfile();
   renderDetectionStatus();
+  if (lastReview) renderReview(lastReview.merged, lastReview.brokers, lastReview.perFileBrokers);
 });
 
 updateStaticText();
-
-// ---------------------------------------------------------------------------
-// Splash screen
-// ---------------------------------------------------------------------------
-
-const splash = document.getElementById("splash");
-const splashCta = document.getElementById("splash-cta");
-
-function dismissSplash() {
-  if (!splash) return;
-  splash.classList.add("splash-exit");
-  splash.addEventListener(
-    "animationend",
-    () => {
-      splash.style.display = "none";
-      document.body.classList.remove("splash-visible");
-    },
-    { once: true },
-  );
-}
-
-function showSplash() {
-  if (!splash) return;
-  splash.style.display = "";
-  splash.classList.remove("splash-exit");
-  document.body.classList.add("splash-visible");
-}
-
-if (splash) {
-  splashCta?.addEventListener("click", dismissSplash);
-  document.body.classList.add("splash-visible");
-}
-
-// Logo/brand click → show splash (but not hamburger)
-document.querySelector(".top-bar-brand")?.addEventListener("click", (e) => {
-  if ((e.target as HTMLElement).closest("#sidebar-toggle")) return;
-  e.preventDefault();
-  showSplash();
-});
 
 // ---------------------------------------------------------------------------
 // Theme toggle (auto / light / dark)
@@ -204,6 +257,7 @@ const opsTable = document.getElementById("operations-table")!;
 const divsTable = document.getElementById("dividends-table")!;
 const exportJsonBtn = document.getElementById("export-json-btn")!;
 const exportCsvBtn = document.getElementById("export-csv-btn")!;
+const exportCsvExcelBtn = document.getElementById("export-csv-excel-btn")!;
 const exportPdfBtn = document.getElementById("export-pdf-btn") as HTMLButtonElement;
 const brokerSelect = document.getElementById("broker-select") as HTMLSelectElement;
 const fileListDiv = document.getElementById("file-list")!;
@@ -219,10 +273,24 @@ const pendingFiles: File[] = [];
 /** Parsed statement data (available after step 2) */
 let mergedStatement: Statement | null = null;
 let detectedBrokers: string[] = [];
+/** Per model, the brokers whose export has no year-end holdings (named in 720/721/D-6). */
+let detectedMissingHoldings: MissingHoldings = { m720: [], m721: [], d6: [] };
 /** Years detected from uploaded data (sorted descending, latest first) */
 let detectedYears: number[] = [];
-/** The active year for processing (auto-detected from data, changeable via dropdown) */
+/** The active year for processing (last closed year in the data by default, changeable via dropdown) */
 let activeYear: number | null = null;
+/** Profile settings the latest processFiles run computed with. */
+let lastRunSettings: ReportSettings | null = null;
+
+function settingsFromProfile(p: FiscalProfile): ReportSettings {
+  return { monodivisa: p.monodivisa, trackAutoConvert: p.trackAutoConvert, titulares: p.titulares };
+}
+/**
+ * The year of the results currently rendered on the Results step, or null when
+ * none are. Kept apart from `currentReport`, which a failed re-run clears while
+ * the previous results stay on screen.
+ */
+let shownResultsYear: number | null = null;
 
 // ---------------------------------------------------------------------------
 // Wizard initialization
@@ -313,6 +381,9 @@ fileInput.addEventListener("change", () => {
   if (fileInput.files) {
     addFiles(Array.from(fileInput.files));
   }
+  // Browsers fire no change event when the same selection is picked again, so
+  // clear it: a file removed with × can then be picked again.
+  fileInput.value = "";
 });
 
 // Reject pathologically large uploads before any parsing to avoid a
@@ -350,11 +421,7 @@ function addFiles(files: File[]) {
     }
   }
   renderFileList();
-  // Reset downstream state when files change
-  mergedStatement = null;
-  currentReport = null;
-  activeYear = null;
-  detectedYears = [];
+  resetDownstream();
   (document.getElementById("wizard-next") as HTMLButtonElement).disabled = pendingFiles.length === 0;
   // Refresh detection unless every file was rejected for size — in that case
   // keep the "file too large" message visible instead of clearing it.
@@ -363,11 +430,32 @@ function addFiles(files: File[]) {
   }
 }
 
+/**
+ * Forget everything built from the previous upload list: the parsed statement,
+ * the report, the year picked from it, the 720/721/D-6 sections (and the data
+ * they cache) and the Renta badge. Called whenever a file is added or removed.
+ */
+function resetDownstream(): void {
+  mergedStatement = null;
+  lastReview = null;
+  currentReport = null;
+  activeYear = null;
+  shownResultsYear = null;
+  detectedYears = [];
+  // Drop any processFiles run still in flight: it was built from the old list.
+  processRunToken++;
+  initSection720();
+  initSection721();
+  initSectionD6();
+  updateBadge("renta", "");
+  clearWizardError();
+}
+
 function renderFileList() {
   fileListDiv.innerHTML = pendingFiles
     .map(
       (f, i) =>
-        `<span class="file-tag">${esc(f.name)} <button data-idx="${i}" class="remove-file">&times;</button></span>`,
+        `<span class="file-tag">${esc(f.name)} <button data-idx="${i}" class="remove-file" aria-label="${esc(t("a11y.remove_file", { name: f.name }))}">&times;</button></span>`,
     )
     .join(" ");
 
@@ -379,8 +467,7 @@ function renderFileList() {
       fileBytesCache.delete(removed);
       pendingFiles.splice(idx, 1);
       renderFileList();
-      mergedStatement = null;
-      currentReport = null;
+      resetDownstream();
       void updateDetectionStatus();
     });
   });
@@ -497,6 +584,7 @@ async function parseFiles(): Promise<void> {
 
   const merged = createEmptyStatement();
   const brokerNames: string[] = [];
+  const parsedExports: ParsedExport[] = [];
 
   try {
     for (const file of pendingFiles) {
@@ -505,6 +593,7 @@ async function parseFiles(): Promise<void> {
         const statement = await parseRevolutXlsx(uint8);
         mergeStatement(merged, statement);
         brokerNames.push("Revolut");
+        parsedExports.push({ broker: "Revolut", statement });
         continue;
       }
 
@@ -512,10 +601,14 @@ async function parseFiles(): Promise<void> {
         const statement = await parseEtoroXlsx(uint8);
         mergeStatement(merged, statement);
         brokerNames.push("eToro");
+        parsedExports.push({ broker: "eToro", statement });
         continue;
       }
 
       const content = new TextDecoder("utf-8").decode(uint8);
+      if (content.trim() === "") {
+        throw new Error(t("error.empty_file", { filename: file.name }));
+      }
       const selectedBroker = brokerSelect.value;
       let parser =
         selectedBroker !== "auto"
@@ -543,18 +636,18 @@ async function parseFiles(): Promise<void> {
       }
 
       if (!parser) {
-        throw new Error(
-          t("error.no_broker_detected", { filename: file.name }) + ` ${brokerParsers.map((p) => p.name).join(", ")}`,
-        );
+        throw new Error(t("error.no_broker_detected", { filename: file.name }));
       }
 
       const statement = parser.parse(content);
       mergeStatement(merged, statement);
       brokerNames.push(parser.name);
+      parsedExports.push({ broker: parser.name, statement });
     }
 
     mergedStatement = finalizeMergedStatement(merged);
     detectedBrokers = [...new Set(brokerNames)];
+    detectedMissingHoldings = findMissingHoldings(parsedExports);
 
     // Detect years from trades + cash transactions. A corrupt date would make
     // parseInt() return NaN (or an absurd year), which then poisons activeYear
@@ -569,25 +662,53 @@ async function parseFiles(): Promise<void> {
     for (const ct of merged.cashTransactions) addYear(ct.dateTime);
     detectedYears = [...yearSet].sort((a, b) => b - a); // descending
     if (!activeYear) {
-      // detectedYears[0] is undefined when no valid year was found (all dates
-      // corrupt / empty file) — fall back to the current calendar year so we
+      // Open on the last closed year (the one a Renta is filed for), not the
+      // newest year in the data and not the year saved in the profile. With no
+      // valid year at all it falls back to the current calendar year, so we
       // never persist NaN as the active year.
-      activeYear = detectedYears[0] ?? new Date().getFullYear();
+      activeYear = pickDefaultYear(detectedYears);
       // Sync profile so 720/721/D-6 use the same year
       const profile = getProfile();
       profile.year = activeYear;
       saveProfile(profile);
+      // Redraw the form, or its stale year select is saved back on the next edit.
+      initProfile();
     }
 
     renderReview(merged, detectedBrokers, brokerNames);
     unlockStep(3);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    reviewContent.innerHTML = `<p class="warning">${t("error.prefix")}${esc(msg)}</p>`;
+    showWizardError(err instanceof Error ? err.message : String(err));
   }
 }
 
+/**
+ * Show an error on the wizard step the user is looking at. Step 2 (and step 1,
+ * which never raises one) uses the Review panel as before. On step 3 the Review
+ * panel is hidden, so the error goes in a banner at the top of the Results step.
+ */
+/** The last review shown on step 2, so a language change can draw it again. */
+let lastReview: { merged: Statement; brokers: string[]; perFileBrokers: string[] } | null = null;
+
+function showWizardError(msg: string): void {
+  const html = `${t("error.prefix")}${esc(msg)}`;
+  if (getCurrentWizardStep() !== 3) {
+    lastReview = null;
+    reviewContent.innerHTML = `<p class="warning">${html}</p>`;
+    return;
+  }
+  clearWizardError();
+  document
+    .getElementById("wizard-step-3")!
+    .insertAdjacentHTML("afterbegin", `<div class="banner banner-warning wizard-error" role="alert"><span>${html}</span></div>`);
+}
+
+function clearWizardError(): void {
+  document.querySelectorAll(".wizard-error").forEach((el) => el.remove());
+}
+
 function renderReview(merged: Statement, brokers: string[], perFileBrokers: string[]): void {
+  lastReview = { merged, brokers, perFileBrokers };
   const tradeCount = merged.trades.length;
   const divCount = merged.cashTransactions.filter(
     (c) => c.type === "Dividends" || c.type === "Payment In Lieu Of Dividends",
@@ -598,7 +719,7 @@ function renderReview(merged: Statement, brokers: string[], perFileBrokers: stri
   currencies.delete("EUR");
 
   const dates = merged.trades.map((tr) => normalizeDate(tr.tradeDate)).sort();
-  const dateRange = dates.length > 0 ? `${formatDate(dates[0]!)} — ${formatDate(dates[dates.length - 1]!)}` : "—";
+  const dateRange = dates.length > 0 ? `${esc(formatDate(dates[0]!))} — ${esc(formatDate(dates[dates.length - 1]!))}` : "—";
 
   reviewContent.innerHTML = `
     <div class="review-grid">
@@ -620,7 +741,7 @@ function renderReview(merged: Statement, brokers: string[], perFileBrokers: stri
       </div>
       <div class="review-card">
         <div class="review-label">${t("review.currencies")}</div>
-        <div class="review-value" style="font-size:1rem">${currencies.size > 0 ? [...currencies].join(", ") : "EUR"}</div>
+        <div class="review-value" style="font-size:1rem">${currencies.size > 0 ? esc([...currencies].join(", ")) : "EUR"}</div>
       </div>
     </div>
     <div class="review-files">
@@ -678,8 +799,9 @@ function renderSectionSafely(containerId: string, render: () => void): void {
 }
 
 /**
- * Monotonic run token. `processFiles` is triggered from four places (wizard
- * Next, year-select change, manual-rate apply, monodivisa toggle) and is async
+ * Monotonic run token. `processFiles` is triggered from several places (wizard
+ * Next, year-select change, manual-rate or opening-lot apply, and a profile
+ * change to monodivisa, titulares or auto-conversions) and is async
  * (it awaits the ECB fetch and a paint yield), so two runs can overlap — e.g.
  * the user changes the year and immediately edits a manual rate. Without a guard
  * the slower run would resolve last and clobber `currentReport`/the rendered
@@ -697,24 +819,28 @@ async function processFiles(): Promise<void> {
 
   const runToken = ++processRunToken;
   const isStale = () => runToken !== processRunToken;
+  // Read the settings when the run starts, so a change made while it awaits the
+  // ECB fetch is seen as a change and starts a newer run.
+  const profileForReport = getProfile();
+  lastRunSettings = settingsFromProfile(profileForReport);
 
   try {
-    const merged = mergedStatement;
     const year = activeYear ?? getProfile().year;
+    // 720/721/D-6 take only the holdings of files that end at this year's end.
+    const merged = yearEndHoldings(mergedStatement, year);
     const manualOpeningLots = getManualOpeningLots();
     // Build the ECB rate map via the shared orchestrator. `deriveEcbNeeds`
-    // (inside buildEcbRateMap) replicates exactly the (currency, year) set this
-    // block used to build by hand: trade + cashTransaction currencies (minus
-    // EUR); every year with a trade OR a cash transaction (cash income can fall
-    // in a year with no trades); the declaration year; and `minYear - 1` for the
-    // 10-day late-December lookback on early-January transactions. The fetched
-    // pair-set is therefore identical to the old inline loop.
+    // (inside buildEcbRateMap) collects trade, cashTransaction, open-position and
+    // cash-balance currencies (minus EUR); every year with a trade OR a cash
+    // transaction (cash income can fall in a year with no trades); the
+    // declaration year; and the year before each of them for the 10-day
+    // late-December lookback on early-January transactions.
     //
-    // We deliberately do NOT pass `noCache` — ECB rates are immutable historical
-    // data, so the orchestrator's per-(currency, year) memoization makes the
+    // We deliberately do NOT pass `noCache` — past years' ECB rates never
+    // change, so the orchestrator's per-(currency, year) memoization makes the
     // repeated processFiles() runs (year-select change, manual-rate entry,
-    // monodivisa toggle) reuse already-fetched rates instead of refetching
-    // everything each time.
+    // profile setting change) reuse already-fetched rates instead of refetching
+    // everything each time. The current year is always refetched.
     const allRates: EcbRateMap = await buildEcbRateMap({ statement: merged, year, manualOpeningLots });
     if (isStale()) return; // a newer run started while fetching — let it win
 
@@ -736,7 +862,6 @@ async function processFiles(): Promise<void> {
     await new Promise<void>((r) => setTimeout(r, 0));
     if (isStale()) return; // superseded during the paint yield — discard this run
 
-    const profileForReport = getProfile();
     const report = generateTaxReport(merged, allRates, year, {
       skipFx: profileForReport.monodivisa,
       trackAutoConvert: profileForReport.trackAutoConvert,
@@ -754,19 +879,35 @@ async function processFiles(): Promise<void> {
     persistReport(report, currentBrokers);
 
     unlockStep(3);
+    clearWizardError();
     renderResults(report);
+    shownResultsYear = report.year;
 
     // Render 720, 721 and D-6 sections with processed data. Each is wrapped so a
     // failure in one is logged and shown inline in that section, without
     // aborting the others or the main flow.
-    renderSectionSafely("m720-content", () => renderSection720(merged, allRates));
-    renderSectionSafely("m721-content", () => renderSection721(merged, allRates));
-    renderSectionSafely("d6-content", () => renderSectionD6(merged, allRates));
+    const missing = detectedMissingHoldings;
+    renderSectionSafely("m720-content", () => renderSection720(merged, allRates, report.yearEndLots, report.capitalGains.disposals, missing.m720));
+    renderSectionSafely("m721-content", () => renderSection721(merged, allRates, missing.m721));
+    renderSectionSafely("d6-content", () => renderSectionD6(merged, allRates, missing.d6));
     updateBadge("renta", t("badge.complete"), "success");
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    reviewContent.innerHTML = `<p class="warning">${t("error.prefix")}${esc(msg)}</p>`;
+    if (isStale()) return; // a newer run owns the screen now
+    // A failed re-run from the Results step leaves the previous results on
+    // screen: put the year back to theirs so the select does not label them
+    // with a year that was never computed.
+    const shownYear = shownResultsYear;
     currentReport = null;
+    if (shownYear !== null && activeYear !== shownYear) {
+      activeYear = shownYear;
+      const profile = getProfile();
+      profile.year = shownYear;
+      saveProfile(profile);
+      initProfile();
+      const yearSelect = document.getElementById("results-year-select") as HTMLSelectElement | null;
+      if (yearSelect) yearSelect.value = String(shownYear);
+    }
+    showWizardError(err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -782,9 +923,14 @@ exportJsonBtn.addEventListener("click", () => {
 
 exportCsvBtn.addEventListener("click", () => {
   if (!currentReport) return;
-  const csv = formatCsv(currentReport);
-  const blob = new Blob([csv], { type: "text/csv" });
-  downloadBlob(blob, `declarenta_${currentReport.year}.csv`);
+  const { blob, filename } = csvDownload(currentReport, "standard");
+  downloadBlob(blob, filename);
+});
+
+exportCsvExcelBtn.addEventListener("click", () => {
+  if (!currentReport) return;
+  const { blob, filename } = csvDownload(currentReport, "excel-es");
+  downloadBlob(blob, filename);
 });
 
 exportPdfBtn.addEventListener("click", () => {
@@ -792,13 +938,12 @@ exportPdfBtn.addEventListener("click", () => {
   exportPdfBtn.disabled = true;
   const report = currentReport;
   void import("../generators/pdf-web.js")
-    .then(({ generatePdfWebReport }) => generatePdfWebReport(report, t as (key: string) => string, getCurrentLocale()))
+    .then(({ generatePdfWebReport }) => generatePdfWebReport(report, t, getCurrentLocale()))
     .then((blob) => {
       downloadBlob(blob, `declarenta_${report.year}.pdf`);
     })
     .catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      reviewContent.innerHTML = `<p class="warning">${t("error.prefix")}${esc(msg)}</p>`;
+      showWizardError(err instanceof Error ? err.message : String(err));
     })
     .finally(() => {
       exportPdfBtn.disabled = false;
@@ -864,6 +1009,11 @@ function nextDir(current: SortDir): SortDir {
   return null;
 }
 
+/** Re-rendering replaces the header, so put keyboard focus back on its button. */
+function refocusSortButton(table: HTMLElement, col: string): void {
+  table.querySelector<HTMLButtonElement>(`th[data-col="${col}"] .sort-btn`)?.focus();
+}
+
 // Event delegation: attach once on stable parent, works across re-renders
 opsTable.addEventListener("click", (e) => {
   const th = (e.target as HTMLElement).closest<HTMLElement>("th.sortable");
@@ -871,7 +1021,9 @@ opsTable.addEventListener("click", (e) => {
   const col = th.dataset.col!;
   const dir = opsSort.col === col ? nextDir(opsSort.dir) : "asc";
   opsSort = { col: dir ? col : "", dir };
+  const hadFocus = th.contains(document.activeElement);
   renderOperationsTable();
+  if (hadFocus) refocusSortButton(opsTable, col);
 });
 
 divsTable.addEventListener("click", (e) => {
@@ -880,24 +1032,28 @@ divsTable.addEventListener("click", (e) => {
   const col = th.dataset.col!;
   const dir = divSort.col === col ? nextDir(divSort.dir) : "asc";
   divSort = { col: dir ? col : "", dir };
+  const hadFocus = th.contains(document.activeElement);
   if (currentReport) renderDividendsTable(currentReport);
+  if (hadFocus) refocusSortButton(divsTable, col);
 });
 
 // ---------------------------------------------------------------------------
 // Search and filter
 // ---------------------------------------------------------------------------
 
-opsSearch.addEventListener("input", () => renderOperationsTable());
+// Each render rebuilds the whole table, so wait for a pause in typing instead
+// of rendering on every keystroke.
+const OPS_SEARCH_DEBOUNCE_MS = 150;
+let opsSearchTimer: ReturnType<typeof setTimeout> | undefined;
+opsSearch.addEventListener("input", () => {
+  clearTimeout(opsSearchTimer);
+  opsSearchTimer = setTimeout(renderOperationsTable, OPS_SEARCH_DEBOUNCE_MS);
+});
 opsFilter.addEventListener("change", () => renderOperationsTable());
 
 // ---------------------------------------------------------------------------
 // Render results (Step 3)
 // ---------------------------------------------------------------------------
-
-function formatDate(d: string): string {
-  if (d.length === 8) return `${d.slice(6, 8)}/${d.slice(4, 6)}/${d.slice(0, 4)}`;
-  return d;
-}
 
 function renderResults(report: TaxSummary) {
   // Year header bar with selector + mismatch warning
@@ -917,9 +1073,12 @@ function renderResults(report: TaxSummary) {
 
     let hdrHtml = `<div class="section-header-bar">
       <span class="section-year">${t("section.year_label")}
-        <select id="results-year-select" class="year-select">${yearOptions}</select>
+        <select id="results-year-select" class="year-select" aria-label="${esc(t("section.year_label"))}">${yearOptions}</select>
       </span>
+      ${report.settings ? `<span class="section-settings" id="results-settings">${esc(formatReportSettings(report.settings, t))}</span>` : ""}
     </div>`;
+
+    hdrHtml += renderNewerYearsNotice(detectedYears, year);
 
     if (!hasData && detectedYears.length > 0 && !detectedYears.includes(year)) {
       hdrHtml += `<div class="banner banner-warning">
@@ -944,7 +1103,8 @@ function renderResults(report: TaxSummary) {
   }
 
   // Manual crypto valuation panel — surfaced when some crypto↔crypto swaps
-  // could not be valued automatically (no ECB rate / no cross-leg). Re-rendered
+  // could not be valued automatically (no ECB rate / no cross-leg), and as a
+  // collapsed list of saved prices once every swap is valued. Re-rendered
   // here each time results render, so it stays in sync on locale change too.
   const resultsSectionEl = document.getElementById("wizard-step-3")!;
   resultsSectionEl.querySelectorAll(".crypto-rates-panel").forEach((el) => el.remove());
@@ -961,11 +1121,12 @@ function renderResults(report: TaxSummary) {
     }
   }
 
-  const unresolved = report.unresolvedCryptoValuations;
-  if (unresolved && unresolved.length > 0) {
-    const panelHtml = renderManualRatesPanel(unresolved);
-    casillasDiv.insertAdjacentHTML("beforebegin", panelHtml);
-    const panel = resultsSectionEl.querySelector<HTMLElement>(".crypto-rates-panel");
+  const cryptoPanelHtml = renderManualRatesPanel(report.unresolvedCryptoValuations ?? []);
+  if (cryptoPanelHtml) {
+    casillasDiv.insertAdjacentHTML("beforebegin", cryptoPanelHtml);
+    // The opening-lots panel also carries .crypto-rates-panel (shared styling)
+    // and sits earlier in the DOM, so exclude it or the Save button stays unbound.
+    const panel = resultsSectionEl.querySelector<HTMLElement>(".crypto-rates-panel:not(.manual-opening-lots-panel)");
     if (panel) {
       bindManualRatesPanel(panel, () => {
         // Re-run the full pipeline so the newly-entered manual rates take
@@ -982,8 +1143,9 @@ function renderResults(report: TaxSummary) {
   const chartData = extractChartData(report);
   // Taxable-base breakdown + clamped total for the estimate chart. The math
   // (netGainLoss includes wash-sale-blocked losses, so they're added back —
-  // they're deferred, not deductible now — and the whole sum is clamped at 0)
-  // lives in the shared decimal.js helper so the money math never round-trips
+  // they're deferred, not deductible now — and a loss in one savings bucket
+  // offsets at most 25% of the other, Art. 49 LIRPF) lives in the shared
+  // decimal.js helper so the money math never round-trips
   // through a lossy Number mid-calculation.
   const { breakdown: taxBaseBreakdown, taxableBase } = computeTaxableBaseBreakdown(report);
   const dtDeduction = report.doubleTaxation.deduction.toNumber();
@@ -1026,6 +1188,14 @@ function sortIndicator(col: string, state: SortState): string {
   return state.col === col ? ` ${state.dir}` : "";
 }
 
+/** A sortable header: a button for keyboard users, aria-sort on the sorted column. */
+function sortableTh(label: string, col: string, state: SortState): string {
+  const ariaSort = state.col === col && state.dir
+    ? ` aria-sort="${state.dir === "asc" ? "ascending" : "descending"}"`
+    : "";
+  return `<th class="sortable${sortIndicator(col, state)}" data-col="${col}"${ariaSort}><button type="button" class="sort-btn">${label}</button></th>`;
+}
+
 function renderOperationsTable() {
   if (!currentReport) return;
   const search = opsSearch.value.toLowerCase();
@@ -1052,8 +1222,8 @@ function renderOperationsTable() {
       let cmp = 0;
       if (col === "isin") cmp = a.isin.localeCompare(b.isin);
       else if (col === "symbol") cmp = a.symbol.localeCompare(b.symbol);
-      else if (col === "buyDate") cmp = a.acquireDate.localeCompare(b.acquireDate);
-      else if (col === "sellDate") cmp = a.sellDate.localeCompare(b.sellDate);
+      else if (col === "buyDate") cmp = normalizeDate(a.acquireDate).localeCompare(normalizeDate(b.acquireDate));
+      else if (col === "sellDate") cmp = normalizeDate(a.sellDate).localeCompare(normalizeDate(b.sellDate));
       else if (col === "qty") cmp = a.quantity.minus(b.quantity).toNumber();
       else if (col === "cost") cmp = a.costBasisEur.minus(b.costBasisEur).toNumber();
       else if (col === "proceeds") cmp = a.proceedsEur.minus(b.proceedsEur).toNumber();
@@ -1063,8 +1233,7 @@ function renderOperationsTable() {
     });
   }
 
-  const th = (label: string, col: string) =>
-    `<th class="sortable${sortIndicator(col, opsSort)}" data-col="${col}">${label}</th>`;
+  const th = (label: string, col: string) => sortableTh(label, col, opsSort);
 
   opsTable.innerHTML = `
     <table>
@@ -1085,17 +1254,17 @@ function renderOperationsTable() {
         ${disposals
           .map(
             (d) => `
-          <tr>
+          <tr${washSaleRowAttr(d)}>
             <td class="mono">${esc(d.isin)}</td>
             <td>${esc(d.symbol)}</td>
-            <td>${formatDate(d.acquireDate)}</td>
-            <td>${formatDate(d.sellDate)}</td>
-            <td>${d.quantity.toString()}</td>
+            <td>${esc(formatDate(d.acquireDate))}</td>
+            <td>${esc(formatDate(d.sellDate))}</td>
+            <td>${fmtQty(d.quantity)}</td>
             <td>${fmtEur(d.costBasisEur)}</td>
             <td>${fmtEur(d.proceedsEur)}</td>
             <td class="${d.gainLossEur.greaterThanOrEqualTo(0) ? "gain" : "loss"}">${fmtEur(d.gainLossEur)}</td>
             <td>${d.holdingPeriodDays}</td>
-          </tr>
+          </tr>${renderWashSaleDetailRow(d, 9)}
         `,
           )
           .join("")}
@@ -1120,7 +1289,7 @@ function renderDividendsTable(report: TaxSummary) {
       let cmp = 0;
       if (col === "isin") cmp = a.isin.localeCompare(b.isin);
       else if (col === "symbol") cmp = a.symbol.localeCompare(b.symbol);
-      else if (col === "date") cmp = a.payDate.localeCompare(b.payDate);
+      else if (col === "date") cmp = normalizeDate(a.payDate).localeCompare(normalizeDate(b.payDate));
       else if (col === "gross") cmp = a.grossAmountEur.minus(b.grossAmountEur).toNumber();
       else if (col === "wht") cmp = a.withholdingTaxEur.minus(b.withholdingTaxEur).toNumber();
       else if (col === "country") cmp = a.withholdingCountry.localeCompare(b.withholdingCountry);
@@ -1128,8 +1297,7 @@ function renderDividendsTable(report: TaxSummary) {
     });
   }
 
-  const th = (label: string, col: string) =>
-    `<th class="sortable${sortIndicator(col, divSort)}" data-col="${col}">${label}</th>`;
+  const th = (label: string, col: string) => sortableTh(label, col, divSort);
 
   divsTable.innerHTML = `
     <table>
@@ -1150,7 +1318,7 @@ function renderDividendsTable(report: TaxSummary) {
           <tr>
             <td class="mono">${esc(d.isin)}</td>
             <td>${esc(d.symbol)}</td>
-            <td>${formatDate(d.payDate)}</td>
+            <td>${esc(formatDate(d.payDate))}</td>
             <td>${fmtEur(d.grossAmountEur)}</td>
             <td>${fmtEur(d.withholdingTaxEur)}</td>
             <td>${esc(d.withholdingCountry)}</td>
@@ -1188,7 +1356,10 @@ if (versionEl) {
 // ---------------------------------------------------------------------------
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("./sw.js").catch(() => {
+  // The build's commit hash in the script URL makes every deploy install a new
+  // worker, whose activate step clears the previous deploy's cached files.
+  // sw.js itself never changes, so without it the first worker stays forever.
+  navigator.serviceWorker.register(`./sw.js?v=${encodeURIComponent(__COMMIT_HASH__)}`).catch(() => {
     // SW registration is optional — fail silently
   });
 }

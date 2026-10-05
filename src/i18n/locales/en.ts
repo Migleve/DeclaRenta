@@ -39,11 +39,18 @@ const en: TranslationKeys = {
   "results.filter_losses": "Losses",
   "results.export_json": "Export JSON",
   "results.export_csv": "Export CSV",
+  "results.export_csv_title": "Comma separator and point decimals: for scripts and English-locale spreadsheets",
+  "results.export_csv_excel": "Export CSV for Excel (ES)",
+  "results.export_csv_excel_title": "Semicolon separator and comma decimals: opens in columns with a double-click in Spanish-locale Excel",
   "results.export_pdf": "Export PDF",
   "results.operations_count": "{{count}} transaction(s)",
   "results.dividends_count": "{{count}} dividend(s)",
+  "results.newer_years_notice": "Showing {{year}}; your data also covers {{years}}.",
   "results.year_mismatch":
     "The file contains data for tax years {{available}}, but the selected year is {{year}}. Select another year from the dropdown above.",
+  "results.settings_used": "Calculation settings: single-currency {{monodivisa}}, holders {{titulares}}, auto-conversions {{autoconvert}}",
+  "results.setting_yes": "yes",
+  "results.setting_no": "no",
 
   "table.isin": "ISIN",
   "table.symbol": "Symbol",
@@ -66,9 +73,15 @@ const en: TranslationKeys = {
   "table.concept": "Concept",
   "table.amount_eur": "Amount (EUR)",
   "table.currency": "Currency",
+  "table.fx_origin": "Source",
+  "table.fx_lot": "FIFO lot",
+  "fx.trigger.conversion": "Currency conversion",
+  "fx.trigger.dividend": "Dividend",
+  "fx.trigger.interest": "Interest",
+  "fx.trigger.commission": "Commission",
+  "fx.trigger.stock_purchase": "Securities purchase",
+  "fx.trigger.stock_sale": "Securities sale",
 
-  "casilla.transmission_value": "Transmission value (all disposals)",
-  "casilla.acquisition_value": "Acquisition value (all disposals)",
   "casilla.listed_transmission_value": "Transmission value (listed shares)",
   "casilla.listed_acquisition_value": "Acquisition value (listed shares)",
   "casilla.acquisition_sale_rate_note":
@@ -87,6 +100,7 @@ const en: TranslationKeys = {
   "casilla.spanish_withholding_detail":
     "Spanish IRPF withholding applied at source on dividends or interest from Spanish issuers (e.g. IBEX shares), even when held at a foreign broker. It is a prepayment deductible from the tax due; it is NOT the double-taxation deduction (box 0588), which applies only to foreign tax.",
   "casilla.double_taxation": "Double taxation deduction",
+  "casilla.dt_foreign_income_total": "Total foreign income",
   "casilla.reintegrated_losses":
     "Deferred losses from prior years now deductible (the repurchased securities were sold): {{amount}} EUR",
   "casilla.blocked_losses": "Losses blocked by anti-churning rule (2 months listed / 1 year unlisted): {{amount}} EUR",
@@ -94,12 +108,36 @@ const en: TranslationKeys = {
   "messages.errors_title": "{{count}} error(s) — action required",
   "messages.warnings_title": "{{count}} warning(s) — please review",
   "messages.info_title": "{{count}} informational note(s)",
+  "pdf.severity_error": "Error",
+  "pdf.severity_warning": "Warning",
+  "pdf.severity_info": "Note",
   "pdf.section_messages": "Messages",
 
   "chart.asset_distribution": "Asset distribution",
   "chart.monthly_gl": "Monthly gain/loss",
   "chart.currency_composition": "Currency composition",
   "chart.withholdings_country": "Withholdings by country",
+  "chart.month_1": "Jan",
+  "chart.month_2": "Feb",
+  "chart.month_3": "Mar",
+  "chart.month_4": "Apr",
+  "chart.month_5": "May",
+  "chart.month_6": "Jun",
+  "chart.month_7": "Jul",
+  "chart.month_8": "Aug",
+  "chart.month_9": "Sep",
+  "chart.month_10": "Oct",
+  "chart.month_11": "Nov",
+  "chart.month_12": "Dec",
+  "asset.stk": "Stocks",
+  "asset.fund": "Funds / ETFs",
+  "asset.opt": "Options",
+  "asset.fop": "Futures options",
+  "asset.crypto": "Cryptocurrencies",
+  "asset.bond": "Bonds",
+  "option.expiration": "Expiration",
+  "option.close": "Early close",
+  "option.exercise": "Exercise/Assignment",
 
   "footer.docs": "Documentation",
   "footer.privacy": "Self-hosted · Total privacy",
@@ -116,6 +154,9 @@ const en: TranslationKeys = {
   "a11y.theme_toggle": "Toggle theme",
   "a11y.drop_zone": "File upload area",
   "a11y.file_input": "Select files",
+  "a11y.ops_search": "Search operations by ISIN or symbol",
+  "a11y.ops_filter": "Filter operations by result",
+  "a11y.remove_file": "Remove {{name}}",
 
   "theme.toggle": "Toggle theme",
 
@@ -158,8 +199,14 @@ const en: TranslationKeys = {
   "compare.saved_reports": "Saved reports",
   "compare.clear_history": "Clear history",
   "compare.clear_confirm": "Delete all saved reports?",
+  "compare.transmission_value": "Transmission value (disposals, excl. FX)",
+  "compare.acquisition_value": "Acquisition value (disposals, excl. FX)",
+  "compare.net_gain_loss": "Net gain/loss (disposals, excl. FX)",
 
-  "error.no_broker_detected": 'Could not detect broker for "{{filename}}". Select the broker manually.',
+  "error.no_broker_detected":
+    'Could not detect the broker for "{{filename}}". If it is a broker report, select the broker manually; if not, remove it from the list.',
+  "error.empty_file":
+    'The file "{{filename}}" is empty. Remove it from the list or export it again from your broker.',
   "error.file_too_large":
     'File "{{filename}}" exceeds the {{limit}} MB limit and was discarded. Export a shorter period or split the file.',
   "error.prefix": "Error: ",
@@ -177,11 +224,12 @@ const en: TranslationKeys = {
 
   // Fiscal profile
   "profile.title": "Tax profile",
-  "profile.description": "This data is used to generate the Modelo 720 and D-6 files.",
+  "profile.description": "This data is used to generate the Modelo 720 and D-6 files. It is stored only in this browser, never on a server.",
   "profile.section_personal": "Personal details",
   "profile.section_declaration": "Declaration settings",
   "profile.nif_label": "NIF/NIE:",
-  "profile.nif_placeholder": "12345678A",
+  "profile.nif_placeholder": "12345678Z",
+  "profile.nif_invalid": "This NIF/NIE is not valid: check the digits and the control letter.",
   "profile.surname_label": "Surname:",
   "profile.surname_placeholder": "Smith Jones",
   "profile.name_label": "First name:",
@@ -202,6 +250,8 @@ const en: TranslationKeys = {
     "If the account has several holders (e.g. a joint or community-property account), DeclaRenta divides every amount equally to show each taxpayer's share (Art. 11.3 LIRPF). Each holder files their own individual return for their share.",
   "profile.saved": "Profile saved",
   "profile.save_btn": "Save profile",
+  "profile.clear_btn": "Delete my data from this browser",
+  "profile.clear_confirm": "Delete your fiscal profile, saved reports and manually entered values from this browser?",
   "profile.incomplete_banner": "Complete your tax profile to generate Modelo 720 and D-6 files.",
   "profile.go_to_profile": "Go to profile",
 
@@ -218,7 +268,7 @@ const en: TranslationKeys = {
     "In the configuration, enable:<ul><li>Trades (required)</li><li>Cash Transactions — dividends and withholdings (required)</li><li>Open Positions — for Modelo 720/D-6 (recommended)</li><li>Financial Instrument Information / Securities Info (recommended)</li></ul>",
   "guide.ibkr.step5":
     "In each section, <strong>select all available fields</strong> (check every box). The more data you include, the more accurate the calculation. At minimum, ensure the <strong>Notes</strong> field is included in Trades — it's needed to detect automatic currency conversions.",
-  "guide.ibkr.step6": "Output format: <strong>XML</strong>",
+  "guide.ibkr.step6": "Output format: <strong>XML</strong>. Under <em>Date Format</em>, keep <strong>yyyyMMdd</strong>",
   "guide.ibkr.step7": "Include <strong>all available years</strong> for correct FIFO calculation",
   "guide.ibkr.step8": "Save the query, run it and download the <code>.xml</code> file",
   "guide.degiro.title": "Degiro (CSV)",
@@ -234,7 +284,7 @@ const en: TranslationKeys = {
   "guide.flatex.step2": "Go to <strong>Transactions</strong> → <strong>Depotumsätze</strong> (portfolio movements)",
   "guide.flatex.step3": "Select <strong>the full history</strong> (needed for FIFO) and export the CSV file",
   "guide.flatex.step4":
-    "For dividends: go to <strong>Kontoumsätze</strong> (account movements), same date range, and export the CSV",
+    "For dividends: go to <strong>Kontoumsätze</strong> (account movements), same date range, and export the CSV. Note: dividends there show the net amount, after withholding; take the gross amount and the withholding from each dividend's PDF statement",
   "guide.flatex.step5":
     "Upload <strong>both CSV files</strong> (Depotumsätze for trades and Kontoumsätze for dividends)",
   "guide.etoro.title": "eToro (XLSX)",
@@ -318,20 +368,56 @@ const en: TranslationKeys = {
   "m720.title": "Modelo 720 — Foreign assets declaration",
   "m720.description": "Informative declaration on assets and rights located abroad.",
   "m720.threshold_exceeded": "Based on your positions ({{amount}} EUR), you are required to file Modelo 720.",
+  "m720.obliged_by_changes": "You must file Modelo 720 because of what changed since your last filing: each category above gives the reason.",
+  "m720.declared_account_missing": "An account you declared has no balance this year ({{accounts}}): if you closed it, you must declare the closing by hand (art. 42 bis.5 RGAT).",
   "m720.threshold_not_exceeded":
     "You are below the 50,000 EUR threshold (total: {{amount}} EUR). Filing is not required.",
   "m720.category_v": "Securities (stocks, funds, bonds)",
   "m720.category_c": "Accounts (cash balances)",
   "m720.category_exceeded": "Exceeds 50,000 EUR — filing required",
   "m720.category_not_exceeded": "Below threshold",
+  "m720.category_undetermined": "Cannot be determined: {{count}} position(s) not valued",
   "m720.no_positions": "Upload a report with open positions in Modelo 100 to analyze Modelo 720.",
+  "m720.brokers_without_holdings": "The {{brokers}} data you uploaded has no positions or balances at 31 December, so they are not counted here. Check the year-end statement from {{brokers}} to see whether your foreign account balances or your foreign shares and funds exceed €50,000.",
   "m720.positions_title": "Declarable positions",
   "m720.positions_unvalued":
-    "{{count}} position(s) could not be valued in euros (no exchange rate available for their currency at year-end) and were excluded from the total. Compute their euro value and include them manually.",
+    "{{count}} position(s) could not be valued in euros (no market price, or no exchange rate for their currency at year-end) and were excluded from the total. Compute their euro value and include them manually.",
   "m720.cash_title": "Cash balances (Accounts)",
   "m720.q4_average": "Q4 average",
   "m720.cash_missing_average":
-    "Some balances do not include the Q4 average required for Modelo 720 account records. They are shown for review but excluded from the generated file.",
+    "Some balances do not include the Q4 average required for Modelo 720 account records. Their 31 December balance does count toward the 50,000 EUR threshold, but those accounts are left out of the generated file: add them by hand, with their Q4 average balance, before filing.",
+  "m720.omitted_title":
+    "These assets do not fit in the file, so declare them by hand in the Modelo 720 form:",
+  "m720.omitted_no_isin":
+    "it has no ISIN; the form identifies it with “Z” plus the issuer's country code",
+  "m720.omitted_no_country":
+    "the country where it is deposited or located is missing",
+  "m720.omitted_no_account":
+    "the account number is missing",
+  "m720.omitted_invalid_code":
+    "sold this year; last year's Modelo 720 declared it with a code or country the file does not accept",
+  "m720.not_generated_left_out":
+    "No file was generated: nothing you have to declare can be written to the file. Declare it by hand in the Modelo 720 form, following the notices above.",
+  "m720.successive_years_note":
+    "If you already filed Modelo 720 in an earlier year, filing again is only required when a category's joint value has risen by more than 20,000 EUR since your last declaration, or when you sold or closed an asset you declared (arts. 42 bis.5 and 42 ter.5 RD 1065/2007). Otherwise filing is optional.",
+  "m720.previous_title": "Your last Modelo 720",
+  "m720.previous_help": "If you have filed Modelo 720 before, upload the .txt file of your last return. What you already declared gets origin M, what you sold gets origin C (extinction), and the 20,000 EUR rule is applied. The file is read in your browser and is not stored.",
+  "m720.previous_loaded": "Loaded {{name}} (tax year {{year}}): {{securities}} securities and {{accounts}} accounts declared.",
+  "m720.previous_clear": "Remove",
+  "m720.previous_invalid": "This file is not a Modelo 720: it has no detail records.",
+  "m720.previous_same_year": "This file is for tax year {{fileYear}}. Upload the Modelo 720 of a year before {{year}}.",
+  "m720.origin": "Origin",
+  "m720.origin_a": "A (new)",
+  "m720.origin_m": "M (already declared)",
+  "m720.successive_last": "Last return: {{previous}} EUR. Change: {{change}} EUR.",
+  "m720.successive_increase": "Up more than 20,000 EUR: you must declare it again",
+  "m720.successive_sold": "You sold securities you declared: you must declare their extinction",
+  "m720.successive_optional": "Not up more than 20,000 EUR: declaring it again is optional",
+  "m720.successive_not_required": "Based on your last Modelo 720, you do not have to file this year: no category is up more than 20,000 EUR and you sold nothing you declared. You can still file it if you want.",
+  "m720.sold_title": "Extinctions: securities sold since your last Modelo 720",
+  "m720.sold_help": "The file includes them with origin C, dated and valued by the last sale.",
+  "m720.sold_no_date": "no sale of the declared shares in {{year}}: the record has no extinction date and a value of 0; complete it before filing",
+  "m720.sold_no_acquisition": "the data does not include its purchase: the record has no acquisition date; complete it before filing",
   "m720.generate_btn": "Generate Modelo 720 file",
   "m720.deadline": "Deadline: January 1 – March 31 of the following year",
   "m720.total_value": "Total value: {{amount}} EUR",
@@ -349,9 +435,10 @@ const en: TranslationKeys = {
   "d6.no_minimum":
     "Since Orden ICT/1408/2021, the D-6 is only required if your stake represents <strong>10% or more</strong> of the capital or voting rights of a listed foreign company. Most retail investors are exempt.",
   "d6.no_positions": "Upload a report with open positions in Modelo 100 to analyze D-6.",
+  "d6.brokers_without_holdings": "The {{brokers}} data you uploaded has no securities positions at 31 December, so they do not appear here. Look them up in the year-end statement from {{brokers}}.",
   "d6.positions_title": "Positions to declare",
   "d6.positions_unvalued":
-    "{{count}} position(s) could not be valued in euros (no exchange rate available for their currency at year-end) and were excluded from the total. Compute their euro value and include them manually.",
+    "{{count}} position(s) could not be valued in euros (no market price, or no exchange rate for their currency at year-end) and were excluded from the total. Compute their euro value and include them manually.",
   "d6.cancellations_title": "Cancellations",
   "d6.generate_btn": "Generate D-6 guide",
   "d6.deadline": "Deadline: January 1 – 31 of the following year",
@@ -370,7 +457,10 @@ const en: TranslationKeys = {
   "m721.threshold_exceeded": "Based on your positions ({{amount}} EUR), you are required to file Modelo 721.",
   "m721.threshold_not_exceeded":
     "You are below the 50,000 EUR threshold (total: {{amount}} EUR). Filing is not required.",
+  "m721.threshold_undetermined":
+    "Cannot tell whether you exceed the 50,000 EUR threshold: the total ({{amount}} EUR) leaves out {{count}} position(s) that could not be valued. Value them before concluding that you do not need to file.",
   "m721.no_positions": "Upload a report with crypto positions in Modelo 100 to analyze Modelo 721.",
+  "m721.brokers_without_holdings": "The {{brokers}} data you uploaded has no crypto holdings at 31 December, so they are not counted here. Check the year-end statement from {{brokers}} to see whether your crypto held abroad exceeds €50,000.",
   "m721.positions_title": "Declarable positions",
   "m721.generate_btn": "Generate Modelo 721 file",
   "m721.deadline": "Deadline: January 1 – March 31 of the following year",
@@ -387,7 +477,7 @@ const en: TranslationKeys = {
   "m721.format_notice":
     "The official AEAT format is XML (Orden HFP/886/2023). DeclaRenta only shows an advisory review: official generation is disabled until validated XML output is implemented.",
   "m721.positions_unvalued":
-    "{{count}} position(s) could not be valued in euros (no exchange rate available for their currency at year-end) and were excluded from the total. Compute their euro value and include them manually.",
+    "{{count}} position(s) could not be valued in euros (no market price, or no exchange rate for their currency at year-end) and were excluded from the total. Compute their euro value and include them manually.",
   "m721.empty_title": "No crypto positions loaded",
   "m721.empty_description":
     "Modelo 721 is a mandatory informative declaration if you hold cryptocurrencies on foreign exchanges valued over 50,000 EUR. Upload your broker report in the Modelo 100 section so DeclaRenta can automatically check if you exceed the threshold. Deadline: January 1 – March 31.",
@@ -396,6 +486,14 @@ const en: TranslationKeys = {
 
   "section.year_label": "Tax year",
   "section.profile_source": 'Data from <a href="#perfil">Fiscal profile</a>',
+  "section.positions_date_mismatch":
+    "The positions in your file are dated {{date}}, not 31/12/{{year}}. These models declare what you held on 31 December, so no file is generated from them. Download a report that ends on 31/12/{{year}} (in IBKR, a Flex Query with end date 31/12/{{year}}) and upload it again.",
+  "section.positions_date_unknown":
+    "Your broker does not say which date the positions are from. Check that the report shows what you held on 31/12/{{year}}: if you downloaded it later, the positions and their values may not match.",
+  "merge.holdings_other_date":
+    "Positions and balances of account {{account}} dated {{date}} left out of Modelo 720, 721 and D-6: they are not the ones at 31/12/{{year}}.",
+  "merge.holdings_other_date.hint":
+    "That file ends on another date. Its trades and transactions still count, but these models declare what you held on 31 December, so its positions and balances are not added. If you are missing that account's report at 31/12/{{year}}, upload it too.",
 
   "badge.complete": "Complete",
   "badge.pending": "Pending",
@@ -444,6 +542,10 @@ const en: TranslationKeys = {
   "annex.title": "Operations Annex (Anexo C1)",
   "annex.subtitle": "Individual operations detail grouped by asset type.",
   "annex.operations": "operation(s)",
+  "annex.wash_blocked": "Loss blocked by repurchase: {{amount}} EUR (art. 33.5 LIRPF)",
+  "annex.wash_dates": "Purchases of the same security that block it: {{dates}}",
+  "annex.wash_hint":
+    'In Renta Web, mark this sale as "Non-attributable capital losses". The loss counts once you sell what you bought back.',
 
   // Tax bracket estimation
   "chart.tax_estimate": "Tax estimate (savings tax base)",
@@ -477,7 +579,7 @@ const en: TranslationKeys = {
   "guide_rw.double_taxation_title": "International double taxation deduction",
   "guide_rw.entidad_emisora_label": "Issuing entity",
   "guide_rw.entidad_emisora_value":
-    "Broker name (e.g. Interactive Brokers, Degiro, eToro…). If consolidating multiple operations in one line, use the main broker.",
+    "Name of the company or security you sold (e.g. Apple Inc.), not the broker's. For currencies, the currency (e.g. USD). If consolidating several operations in one line, use the main security.",
   "guide_rw.tipo_elemento_label": "Asset type",
   "guide_rw.tipo_elemento_value_capital":
     'Select <strong>"Listed shares"</strong> for quoted stocks. For funds: "Collective investment shares". For derivatives/options: "Other assets".',
@@ -517,7 +619,7 @@ const en: TranslationKeys = {
     "The amount from DeclaRenta's box <strong>0588</strong>. This is the lesser of the foreign tax paid and the corresponding Spanish tax (Art. 80 LIRPF).",
   "guide_rw.dt_campo_label": "Which field in the dialog?",
   "guide_rw.dt_campo_hint":
-    'In the double taxation dialog, fill TWO rows:<br>• <strong>"Other net reduced income obtained abroad"</strong> (2nd row) → gross dividend amount from abroad (same value as box 0029).<br>• <strong>"Tax paid abroad"</strong> (last row) → the amount from DeclaRenta\'s box 0588.<br>If you leave the 2nd row empty, Renta Web shows a warning about missing income. Rows 1 and 3 stay at 0.',
+    'In the double taxation dialog, fill TWO rows for each country:<br>• <strong>"Other net reduced income obtained abroad"</strong> (2nd row) → that country\'s "Gross EUR" in the box 0588 detail in DeclaRenta. With a single country, it is the "Total foreign income" row of that detail. It leaves out Spanish dividends and countries with no tax withheld.<br>• <strong>"Tax paid abroad"</strong> (last row) → that country\'s deduction in the same detail (with a single country, the amount of box 0588).<br>If you leave the 2nd row empty, Renta Web shows a warning about missing income. Rows 1 and 3 stay at 0.',
   "guide_rw.capital_gains_note":
     "If you have many operations, you can consolidate them in one line per asset type using generic dates 01/01 and 31/12. Renta Web accepts aggregated amounts.",
   "guide_rw.fx_note":
@@ -568,6 +670,10 @@ const en: TranslationKeys = {
   "crypto_rates.save_btn": "Save and recalculate",
   "crypto_rates.saved": "Saved",
   "crypto_rates.recalculate_hint": "Values are saved in your browser and the report is recalculated.",
+  "crypto_rates.stored_title": "Saved manual prices",
+  "crypto_rates.stored_description":
+    "These euro prices are saved in your browser and are applied every time you process a file. Correct a value and save, or clear them all if one is wrong.",
+  "crypto_rates.clear_btn": "Clear saved prices",
 
   // Manual opening lots for transferred positions
   "opening_lots.title": "Manual lots for transferred positions",
@@ -592,6 +698,8 @@ const en: TranslationKeys = {
   "opening_lots.save_btn": "Save lots and recalculate",
   "opening_lots.clear_btn": "Clear saved lots",
   "opening_lots.saved": "Saved",
+  "opening_lots.row_invalid":
+    "Check the highlighted rows: enter the purchase date and a quantity and price above zero (e.g. 1,234.56). Nothing was saved.",
   "opening_lots.recalculate_hint": "Manual lots are saved in your browser and the report is recalculated.",
 
   // Engine & parser messages (TaxMessage id → localized text)
@@ -612,23 +720,40 @@ const en: TranslationKeys = {
   "fifo.roll_operation": "⚠ C;O (roll) operation: {{symbol}} on {{date}}. Processed as close + open.",
   "fifo.roll_operation.hint":
     "Roll operation processed correctly as a close of the previous position and an open of the new one.",
+  "fifo.unknown_direction": '⚠ Trade with unknown direction ("{{buySell}}"): {{symbol}} on {{date}}. It was not processed.',
+  "fifo.unknown_direction.hint": "Only purchases (BUY) and sales (SELL) are processed. Check this row in the broker file and, if it is a real trade, correct its direction.",
   "fifo.split_applied": "⚡ Split {{isin}} {{ratio}} ({{direction}}) applied ({{date}})",
   "fifo.split_applied.hint":
     "Split applied to all lots. The total cost is unchanged — only the number of shares changes.",
+  "fifo.split_unresolved": "⚠ Split of {{symbol}} on {{date}} not applied: no earlier shares to size the ratio from.",
+  "fifo.split_unresolved.hint":
+    "Also upload the statements for earlier years, back to when the account was opened. Otherwise the share count and the cost of later sales of this security will be wrong.",
   "fifo.merger_applied":
     "🔄 Merger: {{oldIsin}} → {{newIsin}} (ratio {{ratio}}, {{lotsTransferred}} lots transferred, {{date}})",
   "fifo.merger_applied.hint":
     "Tax-neutral merger: the lots are transferred to the new ISIN keeping the original cost basis.",
+  "fifo.cash_merger_disposal":
+    "💶 Cash buyout: {{symbol}} ({{isin}}) × {{quantity}} on {{date}}. Declared as a sale.",
+  "fifo.cash_merger_disposal.hint":
+    "A merger or acquisition paid in cash is a disposal: the gain or loss is computed as for a sale, with the cash received as the transfer value.",
   "fifo.spinoff_applied":
     "🔀 Spin-off: {{parentIsin}} → {{newIsin}} (ratio {{ratio}}, {{costPercent}}% of cost to the spin-off, {{date}})",
   "fifo.spinoff_applied.hint": "The cost is split proportionally between the parent and the spun-off company.",
+  "fifo.corporate_action_unhandled":
+    "ℹ Corporate action {{type}} for {{symbol}} ({{isin}}) on {{date}}: not applied to the FIFO calculation.",
+  "fifo.corporate_action_unhandled.hint":
+    "If it changed the number of shares or the ISIN of the position, check the cost of later sales of this security.",
   "fifo.sell_without_lots":
-    "⚠ Sale without lots: {{symbol}} ({{isin}}) × {{quantity}} on {{date}}. Cost basis = 0 (possible short position or incomplete prior data).",
+    "⚠ Sale without lots: {{symbol}}{{isinSuffix}} × {{quantity}} on {{date}}. Cost basis = 0 (possible short position or incomplete prior data).",
   "fifo.sell_without_lots.hint":
-    "Did you include earlier years in your Flex Query? Select a period covering from the first purchase of this security.",
-  "fifo.insufficient_lots": "⚠ Insufficient lots: {{symbol}} ({{isin}}) × {{quantity}} on {{date}}. Cost basis = 0.",
+    "Does your export include earlier years? Download from your broker a period that starts at the first purchase of this security.",
+  "fifo.cover_without_lots":
+    "⚠ Short cover without lots: {{symbol}} ({{isin}}) × {{quantity}} on {{date}}. Gain not calculated (short position opened outside the period or incomplete prior data).",
+  "fifo.cover_without_lots.hint":
+    "Did you include earlier years in your Flex Query? Select a period covering from the sale that opened this short position.",
+  "fifo.insufficient_lots": "⚠ Insufficient lots: {{symbol}}{{isinSuffix}} × {{quantity}} on {{date}}. Cost basis = 0.",
   "fifo.insufficient_lots.hint":
-    "The Flex Query does not cover all prior purchases of this security. Extend the query period.",
+    "The file does not cover all earlier purchases of this security. Export a longer period from your broker.",
   "fifo.option_invalid_date": "⚠ OptionEAE event without a valid date for {{symbol}}. Skipped.",
   "fifo.option_invalid_date.hint":
     "Option event skipped due to an invalid date. Check that the Flex Query includes the 'Option Exercises, Assignments & Expirations' section.",
@@ -663,6 +788,10 @@ const en: TranslationKeys = {
     "There are {{count}} crypto income item(s) (e.g. staking rewards) that could not be valued automatically and are not included in the calculated amounts.",
   "report.crypto_income_unvalued.hint":
     "This income is paid in the crypto itself and has no official ECB rate. Compute its value in euros on the receipt date and declare it manually as investment income (Box 0027).",
+  "report.dividend_unvalued":
+    "There are {{count}} dividend(s) in {{currencies}} that could not be valued automatically and are not included in the calculated amounts.",
+  "report.dividend_unvalued.hint":
+    "The ECB publishes no official rate for that currency on the payment date. Compute the amount in euros on that date, add it by hand to box 0029, and include its withholding in the international double-taxation deduction (box 0588).",
   "report.crypto_general_gain_unvalued":
     "There are {{count}} crypto capital gain(s) (e.g. airdrops or referral commissions) that could not be valued automatically and are not included in the calculated amounts.",
   "report.crypto_general_gain_unvalued.hint":
@@ -687,21 +816,76 @@ const en: TranslationKeys = {
     "Not all Flatex commissions could be matched: the corresponding cash entries are missing.",
   "flatex.commission.unmatched_trades.hint":
     "Also upload the Kontoumsätze (account movements) CSV together with the Depotumsätze one so that each operation's commission is taken into account (added to the acquisition cost on purchases and subtracted from the transfer value on sales).",
+  "flatex.commission.cross_currency":
+    "Flatex trades without a calculated commission: {{trades}}. The cash entry is in a different currency from the trade.",
+  "flatex.commission.cross_currency.hint":
+    "The commission of those trades has been left at 0. Look up its amount in the order's settlement note in Flatex and take it into account when reviewing the return: it is added to the acquisition value on purchases and subtracted from the transfer value on sales.",
+  "flatex.commission.multi_fill_prorated":
+    "Flatex orders executed in several parts: {{orders}}. Their commission has been split across the executions in proportion to their amount.",
+  "flatex.commission.multi_fill_prorated.hint":
+    "Flatex settled those orders with a number of cash entries different from the number of executions, so it is not possible to tell which commission belongs to each one. The total commission of each order is exact; only the split between executions is approximate.",
+  "flatex.depot.repeated_fills":
+    "Repeated Flatex trades counted only once: {{fills}}. They had the same order number and booking number (TA-Nr.) as one already loaded.",
+  "flatex.depot.repeated_fills.hint":
+    "This usually happens when the same Depotumsätze CSV is uploaded twice, or two exports with overlapping dates. If they really are different trades, check the file: Flatex gives each execution its own TA-Nr.",
+  "flatex.dividends.net_amounts":
+    "Flatex books dividends at the net amount received, after withholding, and the Kontoumsätze CSV does not include the withholding.",
+  "flatex.dividends.net_amounts.hint":
+    "Take the gross amount and the withholding of each payment from the PDF statement Flatex puts in your document inbox, and correct boxes 0029 (gross amount), 0588 (foreign withholding) and 0597 (Spanish withholding) by hand.",
   "degiro.rows_skipped": "{{count}} rows without ISIN/without amount were skipped.",
   "degiro.rows_skipped.hint":
     "These rows had a quantity or price but were missing the ISIN or the amount, so they could not be included as operations. This usually means the CSV columns were not recognized correctly: re-export the Degiro Transactions CSV without modifying the headers.",
+  "degiro.corporate_action_pair":
+    "Possible corporate action on {{date}}: {{oldProduct}} ({{oldIsin}}) → {{newProduct}} ({{newIsin}}). Degiro records it as a sale and a purchase.",
+  "degiro.corporate_action_pair.hint":
+    "Degiro records ISIN changes, splits and share exchanges as a sale of the old security and a purchase of the new one, with no order ID and no costs. DeclaRenta computes them that way: it declares a gain or loss on that day, and the new shares take that price and that date as their cost. Check the notice from Degiro or the issuer. If it was a plain ISIN change, a split or a tax-neutral share exchange (special regime of the Spanish Corporate Income Tax Act), there was no sale: the new shares keep the cost and purchase date of the old ones, so correct that operation in your return. If it was a taxable exchange (art. 37.1.e LIRPF), the calculation is correct.",
+  "degiro.transaction_tax": "Financial transaction tax paid on {{product}} ({{isin}}): {{amount}} {{currency}}.",
+  "degiro.transaction_tax.hint":
+    "Degiro charges this tax when you buy Spanish, French or Italian shares and only shows it in the Account CSV. It is part of the acquisition value (art. 35.1.b LIRPF): add it to the cost of your purchases of that security, because DeclaRenta does not add it automatically.",
   "binance.unparseable_timestamp":
     "{{count}} row(s) of the Binance CSV were skipped because they had an unrecognizable date/time (UTC_Time).",
   "binance.unparseable_timestamp.hint":
     "This is usually caused by a manually edited or incompletely exported file. Re-download the original report from Binance without editing it so those operations are included.",
+  "binance.unhandled_operation":
+    "{{count}} Binance CSV movement(s) with unrecognized operations were skipped: {{operations}}.",
+  "binance.unhandled_operation.hint":
+    "These movements are not included in the calculation. If they are purchases, sales or income (e.g. futures, Binance Card payments, Auto-Invest or cashback), add them to your return by hand and report the operation name so it can be supported.",
+  "binance.unsupported_pair":
+    "{{count}} Binance CSV trade(s) with an unrecognized pair were skipped: {{pairs}}.",
+  "binance.unsupported_pair.hint":
+    "These trades are not included in the calculation. Add them to your return by hand and report the pair so it can be supported.",
+  "etoro.closed_types_skipped":
+    "{{count}} eToro closed position(s) of an unsupported type were skipped: {{types}}.",
+  "etoro.closed_types_skipped.hint":
+    "DeclaRenta does not import these eToro position types yet (e.g. crypto). Their gain or loss is not included in the calculation: add it to your return by hand using the invested amount and the profit eToro shows.",
+  "lightyear.unknown_types":
+    "{{count}} Lightyear CSV row(s) with an unrecognized transaction type were skipped: {{types}}.",
+  "lightyear.unknown_types.hint":
+    "These movements are not included in the calculation. If they are stock splits, share transfers or other corporate actions, check them by hand: they can change the share count or the acquisition cost of later sales.",
   "coinbase.rewards_income_classification":
     '{{count}} "Rewards Income" item(s) from Coinbase were classified as investment income (savings tax base).',
   "coinbase.rewards_income_classification.hint":
     "If some of those amounts are promotional rewards or card cashback (not income from holding or lending crypto), their correct treatment would be a capital gain not arising from a transfer (general tax base). Review their nature if the amount is significant.",
+  "coinbase.unknown_types_skipped":
+    "{{count}} Coinbase row(s) with an unrecognised transaction type were skipped: {{types}}.",
+  "coinbase.unknown_types_skipped.hint":
+    "These rows were left out of the calculation. If any of them is a sale, a purchase, a payment made with crypto or a reward, add it manually so its gain, acquisition cost or income is counted.",
+  "coinbase.advanced_trade_quote_leg_missing":
+    "{{count}} Coinbase Advanced Trade fill(s) were paid or received in a currency other than the valuation currency ({{pairs}}); only the crypto bought or sold was recorded, not the counterpart currency.",
+  "coinbase.advanced_trade_quote_leg_missing.hint":
+    "In these pairs you also dispose of (when buying) or acquire (when selling) the quote currency, whether another crypto or a fiat currency, and that is taxable too. Add the sale or purchase of that currency manually, for the same euro value as the trade, so its gain and acquisition cost add up.",
   "trade_republic.trade_skipped_no_amount":
     "{{count}} Trade Republic buy/sell operation(s) without a usable amount were skipped.",
   "trade_republic.trade_skipped_no_amount.hint":
     'This is usually caused by incomplete rows in the export (an empty or non-numeric "amount" column). If operations are missing, re-download the full transactions CSV from Trade Republic.',
+  "trade_republic.corporate_action_not_applied":
+    "Trade Republic: {{count}} corporate action row(s) (merger, exchange, split) for {{isins}} were not applied.",
+  "trade_republic.corporate_action_not_applied.hint":
+    "The cost of the old securities is not carried over to the new ones, so a later sale of the new security may show no lots and a cost of 0. If it was a merger or an exchange, add the original acquisition cost under “Manual lots for transferred positions”.",
+  "trade_republic.delivery_not_applied":
+    "Trade Republic: {{count}} securities delivery row(s) without a trade (free shares, transfers) for {{isins}} were not imported.",
+  "trade_republic.delivery_not_applied.hint":
+    "Free shares from a promotion are a capital gain in the general tax base at their market value on the delivery date: declare them separately and add that value as the cost under “Manual lots for transferred positions”. If it is a transfer from another broker, add the original purchase cost there.",
   "parser.trading212.unresolved_price_skipped":
     "{{skipped}} operations without a price per share and with an amount in another currency were skipped.",
   "parser.trading212.unresolved_price_skipped.hint":
@@ -715,6 +899,10 @@ const en: TranslationKeys = {
   "parser.order_level_duplicates": "{{skipped}} duplicate aggregated ORDER-type rows were skipped in the operations.",
   "parser.order_level_duplicates.hint":
     'Your Flex Query has the "Orders" detail level enabled in addition to "Executions" in the Trades section, which duplicates every operation. You can disable "Orders" in the Flex Query configuration, but it is not necessary: these rows were ignored automatically to avoid duplicating quantities, amounts and commissions.',
+  "parser.cancelled_trades": "{{count}} trades cancelled by IBKR were skipped together with their cancellation rows.",
+  "parser.cancelled_trades.hint": 'IBKR marks a cancelled execution with a reversing row ("(Ca.)"). The original trade and its cancellation were discarded: they never became a real purchase or sale.',
+  "parser.cancelled_trades_unmatched": "{{count}} IBKR cancellation rows were skipped because the original trade is not in this file.",
+  "parser.cancelled_trades_unmatched.hint": "The cancelled trade falls outside this Flex Query's period. If you load it from another file, it will still count as real: export a period that includes both the trade and its cancellation in the same file.",
 };
 
 export default en;

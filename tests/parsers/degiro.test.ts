@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { degiroParser } from "../../src/parsers/degiro.js";
+import { generateTaxReport } from "../../src/generators/report.js";
+import type { Statement } from "../../src/types/broker.js";
+import type { FlexStatement } from "../../src/types/ibkr.js";
+import type { EcbRateMap } from "../../src/types/ecb.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures: Transactions CSV
@@ -34,11 +38,49 @@ const ACCOUNT_CSV_ES = [
   '15-05-2025,00:00,15-05-2025,APPLE INC,US0378331005,Impuesto sobre dividendos,,USD,"-0,38",USD,"499,62",USD,',
 ].join("\n");
 
+// Real Degiro layout (12 columns): the labelled "Change"/"Mutatie"/"Änderung"
+// column holds the CURRENCY and the unnamed column after it holds the amount,
+// exactly like "Variación" in the Spanish export.
 const ACCOUNT_CSV_EN = [
-  "Date,Time,Value date,Product,ISIN,Description,FX,,Amount,,Balance,,Order ID",
-  "15-05-2025,00:00,15-05-2025,APPLE INC,US0378331005,Dividend,,USD,2.50,USD,500.00,USD,",
-  "15-05-2025,00:00,15-05-2025,APPLE INC,US0378331005,Withholding Tax,,USD,-0.38,USD,499.62,USD,",
+  "Date,Time,Value date,Product,ISIN,Description,FX,Change,,Balance,,Order Id",
+  "15-05-2025,00:00,15-05-2025,APPLE INC,US0378331005,Dividend,,USD,2.50,USD,500.00,",
+  "15-05-2025,00:00,15-05-2025,APPLE INC,US0378331005,Dividend Tax,,USD,-0.38,USD,499.62,",
 ].join("\n");
+
+const ACCOUNT_CSV_NL = [
+  "Datum,Tijd,Valutadatum,Product,ISIN,Omschrijving,FX,Mutatie,,Saldo,,Order Id",
+  "15-05-2025,00:00,15-05-2025,APPLE INC,US0378331005,Dividend,,USD,\"2,50\",USD,\"500,00\",",
+  "15-05-2025,00:00,15-05-2025,APPLE INC,US0378331005,Dividendbelasting,,USD,\"-0,38\",USD,\"499,62\",",
+].join("\n");
+
+const ACCOUNT_CSV_DE = [
+  "Datum,Uhrzeit,Valutadatum,Produkt,ISIN,Beschreibung,FX,Änderung,,Saldo,,Order-ID",
+  "15-05-2025,00:00,15-05-2025,APPLE INC,US0378331005,Dividende,,USD,\"2,50\",USD,\"500,00\",",
+  "15-05-2025,00:00,15-05-2025,APPLE INC,US0378331005,Dividendensteuer,,USD,\"-0,38\",USD,\"499,62\",",
+].join("\n");
+
+function makeRateMap(rates: Record<string, Record<string, string>>): EcbRateMap {
+  const map: EcbRateMap = new Map();
+  for (const [date, currencies] of Object.entries(rates)) {
+    map.set(date, new Map(Object.entries(currencies)));
+  }
+  return map;
+}
+
+function toStatement(parsed: Statement): FlexStatement {
+  return {
+    accountId: "",
+    fromDate: "",
+    toDate: "",
+    period: "",
+    trades: parsed.trades,
+    cashTransactions: parsed.cashTransactions,
+    corporateActions: parsed.corporateActions,
+    openPositions: parsed.openPositions,
+    securitiesInfo: parsed.securitiesInfo,
+    ...(parsed.parserMessages ? { parserMessages: parsed.parserMessages } : {}),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -168,7 +210,10 @@ describe("degiroParser", () => {
       expect(result.cashTransactions).toHaveLength(2);
       expect(result.cashTransactions[0]!.type).toBe("Dividends");
       expect(result.cashTransactions[0]!.amount).toBe("2.50");
+      expect(result.cashTransactions[0]!.currency).toBe("USD");
       expect(result.cashTransactions[1]!.type).toBe("Withholding Tax");
+      expect(result.cashTransactions[1]!.amount).toBe("-0.38");
+      expect(result.cashTransactions[1]!.currency).toBe("USD");
     });
 
     it("should return empty trades from Account CSV", () => {
@@ -178,10 +223,10 @@ describe("degiroParser", () => {
 
     it("should skip non-dividend rows in Account CSV", () => {
       const csv = [
-        "Date,Time,Value date,Product,ISIN,Description,FX,,Amount,,Balance,,Order ID",
-        "01-03-2025,00:00,01-03-2025,,,Deposit,,EUR,1000.00,EUR,1000.00,EUR,",
-        "15-05-2025,00:00,15-05-2025,APPLE INC,US0378331005,Dividend,,USD,2.50,USD,500.00,USD,",
-        "20-06-2025,00:00,20-06-2025,,,flatex Interest,,EUR,0.10,EUR,500.10,EUR,",
+        "Date,Time,Value date,Product,ISIN,Description,FX,Change,,Balance,,Order Id",
+        "01-03-2025,00:00,01-03-2025,,,Deposit,,EUR,1000.00,EUR,1000.00,",
+        "15-05-2025,00:00,15-05-2025,APPLE INC,US0378331005,Dividend,,USD,2.50,USD,500.00,",
+        "20-06-2025,00:00,20-06-2025,,,flatex Interest,,EUR,0.10,EUR,500.10,",
       ].join("\n");
 
       const result = degiroParser.parse(csv);
@@ -238,6 +283,19 @@ describe("degiroParser", () => {
       expect(all.every((t) => t.type === "Dividends" || t.type === "Withholding Tax")).toBe(true);
     });
 
+    it("should report the Spanish Transaction Tax paid, summed per ISIN, as acquisition cost", () => {
+      const result = degiroParser.parse(sampleCsv);
+      const ftt = (result.parserMessages ?? []).filter((m) => m.id === "degiro.transaction_tax");
+      expect(ftt).toHaveLength(1);
+      expect(ftt[0]!.severity).toBe("info");
+      expect(ftt[0]!.context).toEqual({
+        product: "EPSILON GAS SA",
+        isin: "XX0000000005",
+        amount: "0.90",
+        currency: "EUR",
+      });
+    });
+
     it("should return empty trades from Account CSV", () => {
       const result = degiroParser.parse(sampleCsv);
       expect(result.trades).toHaveLength(0);
@@ -265,28 +323,82 @@ describe("degiroParser", () => {
 
   describe("Account CSV — Dutch language", () => {
     it("should detect and parse Dutch Account CSV", () => {
-      const csv = [
-        "Datum,Tijd,Valutadatum,Product,ISIN,Omschrijving,Wisselkoers,,Mutatie,,Saldo,,Order ID",
-        "15-05-2025,00:00,15-05-2025,APPLE INC,US0378331005,Dividend,,USD,2.50,USD,500.00,USD,",
-      ].join("\n");
-
-      expect(degiroParser.detect(csv)).toBe(true);
-      const result = degiroParser.parse(csv);
-      expect(result.cashTransactions).toHaveLength(1);
+      expect(degiroParser.detect(ACCOUNT_CSV_NL)).toBe(true);
+      const result = degiroParser.parse(ACCOUNT_CSV_NL);
+      expect(result.cashTransactions).toHaveLength(2);
       expect(result.cashTransactions[0]!.type).toBe("Dividends");
+      expect(result.cashTransactions[0]!.amount).toBe("2.50");
+      expect(result.cashTransactions[0]!.currency).toBe("USD");
+      expect(result.cashTransactions[1]!.type).toBe("Withholding Tax");
+      expect(result.cashTransactions[1]!.amount).toBe("-0.38");
+      expect(result.cashTransactions[1]!.currency).toBe("USD");
     });
   });
 
   describe("Account CSV — German language", () => {
     it("should detect and parse German Account CSV", () => {
+      expect(degiroParser.detect(ACCOUNT_CSV_DE)).toBe(true);
+      const result = degiroParser.parse(ACCOUNT_CSV_DE);
+      expect(result.cashTransactions).toHaveLength(2);
+      expect(result.cashTransactions[0]!.type).toBe("Dividends");
+      expect(result.cashTransactions[0]!.amount).toBe("2.50");
+      expect(result.cashTransactions[0]!.currency).toBe("USD");
+      expect(result.cashTransactions[1]!.type).toBe("Withholding Tax");
+      expect(result.cashTransactions[1]!.amount).toBe("-0.38");
+      expect(result.cashTransactions[1]!.currency).toBe("USD");
+    });
+
+    it("should book Dividendensteuer as withholding, not as a negative dividend", () => {
       const csv = [
-        "Datum,Uhrzeit,Wertdatum,Produkt,ISIN,Beschreibung,Währung,,Änderung,,Kontostand,,Auftrags-ID",
-        "15-05-2025,00:00,15-05-2025,APPLE INC,US0378331005,Dividend,,USD,2.50,USD,500.00,USD,",
+        "Datum,Uhrzeit,Valutadatum,Produkt,ISIN,Beschreibung,FX,Änderung,,Saldo,,Order-ID",
+        "15-05-2025,00:00,15-05-2025,ALLIANZ SE,DE0008404005,Dividende,,EUR,\"10,00\",EUR,\"510,00\",",
+        "15-05-2025,00:00,15-05-2025,ALLIANZ SE,DE0008404005,Dividendensteuer,,EUR,\"-1,50\",EUR,\"508,50\",",
       ].join("\n");
 
-      expect(degiroParser.detect(csv)).toBe(true);
-      const result = degiroParser.parse(csv);
-      expect(result.cashTransactions).toHaveLength(1);
+      const report = generateTaxReport(toStatement(degiroParser.parse(csv)), makeRateMap({}), 2025);
+      expect(report.dividends.grossIncome.toFixed(2)).toBe("10.00");
+      expect(report.dividends.entries).toHaveLength(1);
+      expect(report.dividends.entries[0]!.withholdingTaxEur.toFixed(2)).toBe("1.50");
+    });
+  });
+
+  describe("Account CSV — real layout reaches the tax report", () => {
+    const rates = makeRateMap({ "2025-05-15": { USD: "0.89" } });
+
+    for (const [lang, csv] of [
+      ["English", ACCOUNT_CSV_EN],
+      ["Dutch", ACCOUNT_CSV_NL],
+      ["German", ACCOUNT_CSV_DE],
+    ] as const) {
+      it(`should compute the ${lang} dividend and withholding in EUR`, () => {
+        const report = generateTaxReport(toStatement(degiroParser.parse(csv)), rates, 2025);
+        // 2.50 USD × 0.89 = 2.225 EUR gross; 0.38 USD × 0.89 = 0.3382 EUR withheld.
+        expect(report.dividends.grossIncome.toFixed(4)).toBe("2.2250");
+        expect(report.dividends.entries[0]!.withholdingTaxEur.toFixed(4)).toBe("0.3382");
+      });
+    }
+  });
+
+  describe("Degiro Account sample, English export (degiro-account-en-sample.csv)", () => {
+    const sampleCsv = readFileSync(new URL("../fixtures/degiro-account-en-sample.csv", import.meta.url), "utf-8");
+
+    it("should read amounts from the unnamed column after Change", () => {
+      expect(degiroParser.detect(sampleCsv)).toBe(true);
+      const result = degiroParser.parse(sampleCsv);
+      expect(result.cashTransactions.map((t) => [t.isin, t.type, t.amount, t.currency])).toEqual([
+        ["XX0000000001", "Dividends", "2.42", "USD"],
+        ["XX0000000001", "Withholding Tax", "-0.51", "USD"],
+        ["XX0000000004", "Dividends", "62.38", "EUR"],
+        ["XX0000000004", "Withholding Tax", "-11.85", "EUR"],
+      ]);
+    });
+
+    it("should report the transaction tax paid on EPSILON GAS SA", () => {
+      const result = degiroParser.parse(sampleCsv);
+      const ftt = (result.parserMessages ?? []).filter((m) => m.id === "degiro.transaction_tax");
+      expect(ftt.map((m) => m.context)).toEqual([
+        { product: "EPSILON GAS SA", isin: "XX0000000005", amount: "0.90", currency: "EUR" },
+      ]);
     });
   });
 
@@ -412,7 +524,8 @@ describe("degiroParser", () => {
     it("should parse all 5 rows without dropping any (buys included)", () => {
       const result = degiroParser.parse(GBX_CSV);
       expect(result.trades).toHaveLength(5);
-      expect(result.parserMessages).toBeUndefined();
+      const ids = (result.parserMessages ?? []).map((m) => m.id);
+      expect(ids).not.toContain("degiro.rows_skipped");
       expect(result.trades.filter((t) => t.buySell === "BUY")).toHaveLength(3);
       expect(result.trades.filter((t) => t.buySell === "SELL")).toHaveLength(2);
     });
@@ -468,6 +581,87 @@ describe("degiroParser", () => {
       )!;
       expect(swapOut.buySell).toBe("SELL");
       expect(swapOut.tradePrice).toBe("4.5889");
+    });
+
+    it("flags the ISIN-swap pair as a possible corporate action and keeps both trades", () => {
+      const result = degiroParser.parse(GBX_CSV);
+      const pairs = (result.parserMessages ?? []).filter((m) => m.id === "degiro.corporate_action_pair");
+      expect(pairs).toHaveLength(1);
+      expect(pairs[0]!.severity).toBe("warning");
+      expect(pairs[0]!.context).toEqual({
+        date: "29/12/2022",
+        oldProduct: "KISTOS PLC",
+        oldIsin: "GB00BLF7NX68",
+        newProduct: "KISTOS HOLDINGS PLC",
+        newIsin: "GB00BP7NQJ77",
+      });
+      // A canje can still be taxable (art. 37.1.e LIRPF), so the rows stay as trades.
+      expect(result.trades).toHaveLength(5);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Corporate-action pairs. Degiro books an ISIN change, a split or a share
+  // exchange as a same-day sale of the old ISIN plus a buy of the new one,
+  // with no order ID and no costs. Taxing that as an ordinary sale can be
+  // wrong (a neutral canje keeps the old cost and date), so the parser warns.
+  // -------------------------------------------------------------------------
+
+  describe("corporate-action pairs", () => {
+    const HEADER =
+      "Fecha,Hora,Producto,ISIN,Bolsa de referencia,Centro de ejecución,Número,Precio,,Valor local,,Valor EUR,Tipo de cambio,Comisión AutoFX,Costes de transacción y/o externos EUR,Total EUR,ID Orden";
+    const BUY_2020 =
+      '15-06-2020,10:00,OLDCO SA,XX0000000OLD,MAD,XMAD,1000,"0,5000",EUR,"-500,00",EUR,"-500,00",,"0,00","-2,00","-502,00",00000000-0000-4000-8000-000000000010';
+
+    it("flags a 1000 -> 100 ISIN change booked as a sale plus a buy", () => {
+      const csv = [
+        HEADER,
+        '10-03-2022,00:00,OLDCO SA,XX0000000OLD,MAD,,-1000,"1,0000",EUR,"1000,00",EUR,"1000,00",,"0,00",,"1000,00",',
+        '10-03-2022,00:00,NEWCO SA,XX0000000NEW,MAD,,100,"10,0000",EUR,"-1000,00",EUR,"-1000,00",,"0,00",,"-1000,00",',
+        BUY_2020,
+      ].join("\n");
+      const result = degiroParser.parse(csv);
+      const pairs = (result.parserMessages ?? []).filter((m) => m.id === "degiro.corporate_action_pair");
+      expect(pairs).toHaveLength(1);
+      expect(pairs[0]!.context).toEqual({
+        date: "10/03/2022",
+        oldProduct: "OLDCO SA",
+        oldIsin: "XX0000000OLD",
+        newProduct: "NEWCO SA",
+        newIsin: "XX0000000NEW",
+      });
+      expect(result.trades).toHaveLength(3);
+    });
+
+    it("does not flag ordinary same-day trades that carry order IDs and costs", () => {
+      const csv = [
+        HEADER,
+        '10-03-2022,10:00,OLDCO SA,XX0000000OLD,MAD,XMAD,-1000,"1,0000",EUR,"1000,00",EUR,"1000,00",,"0,00","-2,00","998,00",00000000-0000-4000-8000-000000000011',
+        '10-03-2022,10:05,NEWCO SA,XX0000000NEW,MAD,XMAD,100,"10,0000",EUR,"-1000,00",EUR,"-1000,00",,"0,00","-2,00","-1002,00",00000000-0000-4000-8000-000000000012',
+        BUY_2020,
+      ].join("\n");
+      const result = degiroParser.parse(csv);
+      const ids = (result.parserMessages ?? []).map((m) => m.id);
+      expect(ids).not.toContain("degiro.corporate_action_pair");
+    });
+
+    it("does not flag an order-less pair whose values do not match", () => {
+      const csv = [
+        HEADER,
+        '10-03-2022,00:00,OLDCO SA,XX0000000OLD,MAD,,-1000,"1,0000",EUR,"1000,00",EUR,"1000,00",,"0,00",,"1000,00",',
+        '10-03-2022,00:00,NEWCO SA,XX0000000NEW,MAD,,10,"30,0000",EUR,"-300,00",EUR,"-300,00",,"0,00",,"-300,00",',
+        BUY_2020,
+      ].join("\n");
+      const result = degiroParser.parse(csv);
+      const ids = (result.parserMessages ?? []).map((m) => m.id);
+      expect(ids).not.toContain("degiro.corporate_action_pair");
+    });
+
+    it("does not flag anything in the 19-column sample export", () => {
+      const sampleCsv = readFileSync(new URL("../fixtures/degiro-transactions-sample.csv", import.meta.url), "utf-8");
+      const result = degiroParser.parse(sampleCsv);
+      const ids = (result.parserMessages ?? []).map((m) => m.id);
+      expect(ids).not.toContain("degiro.corporate_action_pair");
     });
   });
 });

@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { parseIbkrFlexXml } from "../../src/parsers/ibkr.js";
+import { generateTaxReport } from "../../src/generators/report.js";
+import { computeCasillaBlocks } from "../../src/generators/casillas.js";
+import type { EcbRateMap } from "../../src/types/ecb.js";
 
 function fixture(name: string): string {
   return readFileSync(new URL(`../fixtures/${name}`, import.meta.url), "utf-8");
@@ -1285,5 +1288,351 @@ describe("parseIbkrFlexXml — XML entity hardening (XXE / billion-laughs)", () 
 </FlexQueryResponse>`;
     const result = parseIbkrFlexXml(xml);
     expect(result.trades[0]!.description).toBe("E-MINI S&P 500 <CME>");
+  });
+});
+
+describe("parseIbkrFlexXml — cancelled executions (buySell \"(Ca.)\")", () => {
+  // IBKR writes a cancelled execution as a reversing row: the original fill
+  // stays in the file and a second row with buySell "SELL (Ca.)"/"BUY (Ca.)",
+  // opposite quantity and notes "Ca" undoes it. Neither row is a real trade.
+  function wrap(trades: string): string {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+    <FlexQueryResponse queryName="Test" type="AF">
+      <FlexStatements count="1">
+        <FlexStatement accountId="U9999999" fromDate="20250101" toDate="20251231" period="LastYear">
+          <Trades>${trades}</Trades>
+          <CashTransactions /><CorporateActions /><OpenPositions /><SecuritiesInfo />
+        </FlexStatement>
+      </FlexStatements>
+    </FlexQueryResponse>`;
+  }
+
+  function row(attrs: {
+    id: string;
+    date: string;
+    qty: string;
+    price: string;
+    buySell: string;
+    oci: "O" | "C";
+    order: string;
+    notes?: string;
+  }): string {
+    const money = (Number(attrs.qty) * Number(attrs.price)).toString();
+    return `<Trade tradeID="${attrs.id}" accountId="U9999999" conid="265598" symbol="ACME" description="ACME"
+             isin="US0000000001" assetCategory="STK" currency="USD" tradeDate="${attrs.date}"
+             settlementDate="${attrs.date}" quantity="${attrs.qty}" tradePrice="${attrs.price}"
+             tradeMoney="${money}" proceeds="${-Number(money)}" cost="0" fifoPnlRealized="0"
+             fxRateToBase="0.9" buySell="${attrs.buySell}" openCloseIndicator="${attrs.oci}"
+             exchange="NASDAQ" ibCommissionCurrency="USD" ibCommission="0" taxes="0"
+             multiplier="1" ibOrderID="${attrs.order}"${attrs.notes ? ` notes="${attrs.notes}"` : ""} />`;
+  }
+
+  const BUY = row({ id: "T1", date: "20250310", qty: "100", price: "10", buySell: "BUY", oci: "O", order: "O1" });
+  const SELL = row({ id: "T2", date: "20250610", qty: "-100", price: "15", buySell: "SELL", oci: "C", order: "O2" });
+  const SELL_CANCEL = row({
+    id: "T3", date: "20250611", qty: "100", price: "15", buySell: "SELL (Ca.)", oci: "C", order: "O2", notes: "Ca",
+  });
+
+  it("drops a cancelled SELL together with the sale it cancels", () => {
+    const result = parseIbkrFlexXml(wrap(BUY + SELL + SELL_CANCEL));
+    expect(result.trades.map((t) => `${t.tradeID}:${t.buySell}:${t.quantity}`)).toEqual(["T1:BUY:100"]);
+    const msg = result.parserMessages?.find((m) => m.id === "parser.cancelled_trades");
+    expect(msg?.severity).toBe("info");
+    expect(msg?.context).toEqual({ count: "1" });
+    expect(result.parserMessages?.find((m) => m.id === "parser.cancelled_trades_unmatched")).toBeUndefined();
+  });
+
+  it("drops a cancelled BUY together with the purchase it cancels", () => {
+    const buyCancel = row({
+      id: "T4", date: "20250310", qty: "-100", price: "10", buySell: "BUY (Ca.)", oci: "O", order: "O1", notes: "Ca",
+    });
+    const result = parseIbkrFlexXml(wrap(BUY + buyCancel));
+    expect(result.trades).toHaveLength(0);
+    expect(result.parserMessages?.find((m) => m.id === "parser.cancelled_trades")?.context).toEqual({ count: "1" });
+  });
+
+  it("recognises a cancellation flagged only by the Ca notes code", () => {
+    const notesOnly = row({
+      id: "T3", date: "20250611", qty: "100", price: "15", buySell: "SELL", oci: "C", order: "O2", notes: "Ca",
+    });
+    const result = parseIbkrFlexXml(wrap(BUY + SELL + notesOnly));
+    expect(result.trades.map((t) => t.tradeID)).toEqual(["T1"]);
+  });
+
+  it("drops an orphan cancellation alone and warns, never turning it into a trade", () => {
+    // The cancelled sale was executed outside this export's date range.
+    const result = parseIbkrFlexXml(wrap(BUY + SELL_CANCEL));
+    expect(result.trades.map((t) => t.tradeID)).toEqual(["T1"]);
+    const msg = result.parserMessages?.find((m) => m.id === "parser.cancelled_trades_unmatched");
+    expect(msg?.severity).toBe("warning");
+    expect(msg?.context).toEqual({ count: "1" });
+    expect(result.parserMessages?.find((m) => m.id === "parser.cancelled_trades")).toBeUndefined();
+  });
+
+  it("does not pair a cancellation with a fill at a different price", () => {
+    const otherSell = row({ id: "T5", date: "20250610", qty: "-100", price: "16", buySell: "SELL", oci: "C", order: "O3" });
+    const result = parseIbkrFlexXml(wrap(BUY + otherSell + SELL_CANCEL));
+    expect(result.trades.map((t) => t.tradeID)).toEqual(["T1", "T5"]);
+    expect(result.parserMessages?.find((m) => m.id === "parser.cancelled_trades_unmatched")?.context).toEqual({
+      count: "1",
+    });
+  });
+
+  // Cancel-and-rebook as IBKR exports it: the fill is busted and booked again
+  // with a corrected commission. The original and the rebook share conid,
+  // price, quantity, ibOrderID and tradeDate; only the cancel row's
+  // origTransactionID says which one was cancelled.
+  function linkedRow(attrs: {
+    transactionID: string;
+    transactionType: "ExchTrade" | "TradeCancel";
+    qty: string;
+    buySell: string;
+    commission: string;
+    execId: string;
+    origTransactionID?: string;
+  }): string {
+    const cancel = attrs.transactionType === "TradeCancel";
+    return `<Trade accountId="U9999999" currency="AUD" assetCategory="STK" fxRateToBase="0.65" symbol="GCM"
+             description="GRAN COLOMBIA GOLD CORP" conid="80845553" isin="CA38501D2041" multiplier="1"
+             tradeID="${cancel ? "" : "2001"}" tradeDate="20250911" settlementDate="20250913"
+             transactionType="${attrs.transactionType}" exchange="${cancel ? "--" : "ASX"}"
+             quantity="${attrs.qty}" tradePrice="0.32" tradeMoney="${Number(attrs.qty) * 0.32}"
+             proceeds="${-Number(attrs.qty) * 0.32}" taxes="0" ibCommission="${attrs.commission}"
+             ibCommissionCurrency="AUD" openCloseIndicator="${cancel ? "" : "O"}" notes="${cancel ? "Ca" : ""}"
+             cost="0" fifoPnlRealized="0" origTradeID="${cancel ? "2001" : ""}" origOrderID="${cancel ? "900001" : "0"}"
+             origTransactionID="${attrs.origTransactionID ?? ""}" transactionID="${attrs.transactionID}"
+             buySell="${attrs.buySell}" ibOrderID="900001" ibExecID="${attrs.execId}" levelOfDetail="EXECUTION" />`;
+  }
+
+  const ORIGINAL = linkedRow({
+    transactionID: "1001", transactionType: "ExchTrade", qty: "5000", buySell: "BUY", commission: "-6",
+    execId: "0000d514.5159662d.01.01",
+  });
+  const CANCEL = linkedRow({
+    transactionID: "1002", transactionType: "TradeCancel", qty: "-5000", buySell: "BUY (Ca.)", commission: "0",
+    execId: "", origTransactionID: "1001",
+  });
+  const REBOOK = linkedRow({
+    transactionID: "1003", transactionType: "ExchTrade", qty: "5000", buySell: "BUY", commission: "0",
+    execId: "0000d514.5159662d.01.02",
+  });
+
+  it.each([
+    ["original, cancel, rebook", ORIGINAL + CANCEL + REBOOK],
+    ["rebook, original, cancel", REBOOK + ORIGINAL + CANCEL],
+    ["cancel, rebook, original", CANCEL + REBOOK + ORIGINAL],
+  ])("cancel-and-rebook keeps the rebook and drops the original named by origTransactionID (%s)", (_, xml) => {
+    const result = parseIbkrFlexXml(wrap(xml));
+    expect(result.trades).toHaveLength(1);
+    expect(result.trades[0]!.buySell).toBe("BUY");
+    expect(result.trades[0]!.quantity).toBe("5000");
+    expect(result.trades[0]!.commission).toBe("0");
+    expect(result.parserMessages?.find((m) => m.id === "parser.cancelled_trades")?.context).toEqual({ count: "1" });
+    expect(result.parserMessages?.find((m) => m.id === "parser.cancelled_trades_unmatched")).toBeUndefined();
+  });
+
+  it("a linked cancellation whose original is outside the export never takes the rebook with it", () => {
+    const result = parseIbkrFlexXml(wrap(REBOOK + CANCEL));
+    expect(result.trades).toHaveLength(1);
+    expect(result.trades[0]!.commission).toBe("0");
+    expect(result.parserMessages?.find((m) => m.id === "parser.cancelled_trades_unmatched")?.context).toEqual({
+      count: "1",
+    });
+  });
+
+  it("recognises a cancellation flagged only by transactionType TradeCancel", () => {
+    const typeOnly = linkedRow({
+      transactionID: "1002", transactionType: "TradeCancel", qty: "-5000", buySell: "BUY", commission: "0",
+      execId: "", origTransactionID: "1001",
+    }).replace(' notes="Ca"', ' notes=""');
+    const result = parseIbkrFlexXml(wrap(ORIGINAL + typeOnly + REBOOK));
+    expect(result.trades.map((t) => t.commission)).toEqual(["0"]);
+  });
+
+  it("end to end: a cancelled sale adds nothing to casilla 0328", () => {
+    const rates: EcbRateMap = new Map([
+      ["2025-03-10", new Map([["USD", "0.9"]])],
+      ["2025-06-10", new Map([["USD", "0.9"]])],
+      ["2025-06-11", new Map([["USD", "0.9"]])],
+    ]);
+    const report = generateTaxReport(parseIbkrFlexXml(wrap(BUY + SELL + SELL_CANCEL)), rates, 2025);
+    expect(report.capitalGains.disposals).toHaveLength(0);
+    expect(computeCasillaBlocks(report.capitalGains.disposals).listedShares.transmissionValue.toFixed(2)).toBe("0.00");
+  });
+});
+
+describe("IBKR option underlying ISIN and category", () => {
+  function eaeXml(optionAttrs: string, deliveryAttrs: string): string {
+    return `<FlexQueryResponse queryName="Test" type="AF">
+      <FlexStatements count="1">
+        <FlexStatement accountId="U1" fromDate="20250101" toDate="20251231" period="LastYear">
+          <Trades /><CashTransactions /><CorporateActions /><OpenPositions /><SecuritiesInfo />
+          <OptionEAE>
+            <OptionEAE accountId="U1" currency="USD" symbol="HUT   250117C00020000" description="HUT 17JAN25 20 C"
+                       conid="669970792" isin="" underlyingSymbol="HUT" multiplier="100" strike="20"
+                       expiry="20250117" putCall="C" date="20250117" quantity="-6" tradePrice="0" ${optionAttrs} />
+            <OptionEAE accountId="U1" currency="USD" assetCategory="STK" symbol="HUT" description="HUT 8 CORP"
+                       conid="669228291" underlyingSymbol="HUT" multiplier="1" strike="" putCall=""
+                       date="20250117" quantity="600" tradePrice="20" ${deliveryAttrs} />
+          </OptionEAE>
+        </FlexStatement>
+      </FlexStatements>
+    </FlexQueryResponse>`;
+  }
+
+  it("reads the underlying ISIN of an OptionEAE row from underlyingSecurityID", () => {
+    const r = parseIbkrFlexXml(fixture("ibkr-options.xml"));
+    const hut = r.optionExercises!.find((e) => e.underlyingSymbol === "HUT")!;
+    expect(hut.underlyingIsin).toBe("US44812J1043");
+    expect(hut.assetCategory).toBe("OPT");
+  });
+
+  it("falls back to the paired delivery row's ISIN when underlyingSecurityID is not an ISIN", () => {
+    const r = parseIbkrFlexXml(eaeXml(`assetCategory="OPT" underlyingSecurityID="44812J104"`, `isin="US44812J1043"`));
+    expect(r.optionExercises![0]!.underlyingIsin).toBe("US44812J1043");
+  });
+
+  it("keeps an explicit underlyingIsin over the other sources", () => {
+    const r = parseIbkrFlexXml(
+      eaeXml(`assetCategory="OPT" underlyingIsin="US0000000001" underlyingSecurityID="US44812J1043"`, `isin="US44812J1043"`),
+    );
+    expect(r.optionExercises![0]!.underlyingIsin).toBe("US0000000001");
+  });
+
+  it("reads the event type from IBKR's transactionType attribute", () => {
+    const r = parseIbkrFlexXml(fixture("ibkr-options.xml"));
+    const action = (sym: string) => r.optionExercises!.find((e) => e.underlyingSymbol === sym)!.action;
+    expect(action("HUT")).toBe("Exercise");
+    expect(action("TDW")).toBe("Expiration");
+    expect(action("EC")).toBe("Expiration");
+
+    const assigned = parseIbkrFlexXml(eaeXml(`assetCategory="OPT" transactionType="Assignment"`, `isin="US44812J1043"`));
+    expect(assigned.optionExercises![0]!.action).toBe("Assignment");
+  });
+
+  it("carries the FOP/FSFOP category of an OptionEAE row", () => {
+    const fop = parseIbkrFlexXml(eaeXml(`assetCategory="FOP"`, ``));
+    expect(fop.optionExercises![0]!.assetCategory).toBe("FOP");
+    const fsfop = parseIbkrFlexXml(eaeXml(`assetCategory="FSFOP"`, ``));
+    expect(fsfop.optionExercises![0]!.assetCategory).toBe("FSFOP");
+  });
+
+  it("reads a trade's underlying ISIN from underlyingSecurityID, never from a CUSIP", () => {
+    const r = parseIbkrFlexXml(fixture("ibkr-options.xml"));
+    const abtc = r.trades.find((t) => t.underlyingSymbol === "ABTC")!;
+    expect(abtc.underlyingIsin).toBe("US02462A1043");
+
+    const cusip = parseIbkrFlexXml(`<FlexQueryResponse queryName="Test" type="AF">
+      <FlexStatements count="1">
+        <FlexStatement accountId="U1" fromDate="20250101" toDate="20251231" period="LastYear">
+          <Trades>
+            <Trade tradeID="T1" accountId="U1" symbol="XYZ 250620C00010000" isin="" assetCategory="OPT" currency="USD"
+                   tradeDate="20250315" quantity="1" tradePrice="1" buySell="BUY" multiplier="100"
+                   putCall="C" strike="10" expiry="20250620" underlyingSymbol="XYZ" underlyingSecurityID="98765X104" />
+          </Trades>
+          <CashTransactions /><CorporateActions /><OpenPositions /><SecuritiesInfo />
+        </FlexStatement>
+      </FlexStatements>
+    </FlexQueryResponse>`);
+    expect(cusip.trades[0]!.underlyingIsin).toBeUndefined();
+  });
+});
+
+describe("IBKR settlement date (settleDateTarget)", () => {
+  it("reads settleDateTarget from a real Flex export, so trades carry their settlement date", () => {
+    const r = parseIbkrFlexXml(fixture("ibkr-autoconvert.xml"));
+    expect(r.trades.length).toBeGreaterThan(0);
+    expect(r.trades.every((t) => t.settlementDate !== "")).toBe(true);
+    // PYPL bought 2025-04-10, settles T+1.
+    const pypl = r.trades.find((t) => t.tradeID === "TXN-0003")!;
+    expect(pypl.tradeDate).toBe("20250410");
+    expect(pypl.settlementDate).toBe("20250411");
+  });
+
+  it("dates a USD→EUR conversion traded 31 Dec and settling 2 Jan in the next year, at the settlement rate", () => {
+    const xml = `<FlexQueryResponse queryName="Test" type="AF">
+      <FlexStatements count="1">
+        <FlexStatement accountId="U1" fromDate="20250101" toDate="20260131" period="Custom">
+          <Trades>
+            <Trade tradeID="F1" accountId="U1" symbol="EUR.USD" description="EUR.USD" isin="" assetCategory="CASH" currency="USD"
+                   tradeDate="20251103" settleDateTarget="20251105" quantity="-800" tradePrice="1.25" tradeMoney="-1000"
+                   proceeds="1000" cost="0" buySell="SELL" openCloseIndicator="" exchange="IDEALFX"
+                   ibCommission="0" ibCommissionCurrency="EUR" taxes="0" multiplier="1" />
+            <Trade tradeID="C1" accountId="U1" symbol="EUR.USD" description="EUR.USD" isin="" assetCategory="CASH" currency="USD"
+                   tradeDate="20251231" settleDateTarget="20260102" quantity="900" tradePrice="1.1111" tradeMoney="1000"
+                   proceeds="-1000" cost="0" buySell="BUY" openCloseIndicator="" exchange="IDEALFX"
+                   ibCommission="0" ibCommissionCurrency="EUR" taxes="0" multiplier="1" />
+          </Trades>
+          <CashTransactions /><CorporateActions /><OpenPositions /><SecuritiesInfo />
+        </FlexStatement>
+      </FlexStatements>
+    </FlexQueryResponse>`;
+    const rates: EcbRateMap = new Map([
+      ["2025-11-03", new Map([["USD", "0.80"]])],
+      ["2025-11-05", new Map([["USD", "0.80"]])],
+      ["2025-12-31", new Map([["USD", "0.90"]])],
+      ["2026-01-02", new Map([["USD", "0.95"]])],
+    ]);
+    const statement = parseIbkrFlexXml(xml);
+
+    const y2025 = generateTaxReport(statement, rates, 2025);
+    expect(y2025.fxGains.disposals).toHaveLength(0);
+    expect(y2025.fxGains.netGainLoss.toFixed(2)).toBe("0.00");
+
+    const y2026 = generateTaxReport(statement, rates, 2026);
+    expect(y2026.fxGains.disposals).toHaveLength(1);
+    expect(y2026.fxGains.disposals[0]!.disposeDate).toBe("2026-01-02");
+    // $1000 × (0.95 − 0.80) at the settlement-date rate, not 0.90 on the trade date.
+    expect(y2026.fxGains.netGainLoss.toFixed(2)).toBe("150.00");
+  });
+});
+
+describe("IBKR Flex date format (Date Format setting)", () => {
+  // The Flex Query "Date Format" setting also offers MM/dd/yyyy, dd/MM/yyyy,
+  // dd-MMM-yy and more. Those dates never match the declaration year, so the
+  // file used to produce a clean report with 0 gains and 0 dividends.
+  function flexXml(tradeDates: [string, string], cashDateTime: string): string {
+    return `<FlexQueryResponse queryName="Test" type="AF">
+      <FlexStatements count="1">
+        <FlexStatement accountId="U1" fromDate="20240101" toDate="20241231" period="LastYear">
+          <Trades>
+            <Trade tradeID="B1" accountId="U1" symbol="ACME" description="ACME" isin="US0000000001" assetCategory="STK" currency="EUR"
+                   tradeDate="${tradeDates[0]}" quantity="10" tradePrice="100" tradeMoney="1000" proceeds="-1000" cost="1000"
+                   buySell="BUY" openCloseIndicator="O" exchange="X" ibCommission="0" ibCommissionCurrency="EUR" taxes="0" multiplier="1" />
+            <Trade tradeID="S1" accountId="U1" symbol="ACME" description="ACME" isin="US0000000001" assetCategory="STK" currency="EUR"
+                   tradeDate="${tradeDates[1]}" quantity="-10" tradePrice="150" tradeMoney="-1500" proceeds="1500" cost="-1000"
+                   buySell="SELL" openCloseIndicator="C" exchange="X" ibCommission="0" ibCommissionCurrency="EUR" taxes="0" multiplier="1" />
+          </Trades>
+          <CashTransactions>
+            <CashTransaction transactionID="D1" accountId="U1" symbol="ACME" description="ACME Cash Dividend" isin="US0000000001"
+                   currency="EUR" dateTime="${cashDateTime}" amount="50" fxRateToBase="1" type="Dividends" />
+          </CashTransactions>
+          <CorporateActions /><OpenPositions /><SecuritiesInfo />
+        </FlexStatement>
+      </FlexStatements>
+    </FlexQueryResponse>`;
+  }
+
+  it.each([
+    ["yyyyMMdd", ["20240110", "20240603"], "20240615;093000"],
+    ["yyyy-MM-dd", ["2024-01-10", "2024-06-03"], "2024-06-15;093000"],
+    ["yyyyMMdd, no date/time separator", ["20240110", "20240603"], "20240615093000"],
+  ] as const)("accepts %s dates and reports the gain and dividend", (_label, tradeDates, cashDateTime) => {
+    const report = generateTaxReport(parseIbkrFlexXml(flexXml([...tradeDates], cashDateTime)), new Map(), 2024);
+    expect(report.capitalGains.netGainLoss.toFixed(2)).toBe("500.00");
+    expect(report.dividends.grossIncome.toFixed(2)).toBe("50.00");
+  });
+
+  it.each([
+    ["MM/dd/yyyy", "01/10/2024"],
+    ["dd/MM/yyyy", "10/01/2024"],
+    ["dd-MMM-yy", "10-Jan-24"],
+    ["MMddyyyy", "01102024"],
+  ])("rejects %s trade dates instead of returning an empty report", (_label, date) => {
+    expect(() => parseIbkrFlexXml(flexXml([date, "20240603"], "20240615"))).toThrow(/yyyyMMdd/);
+  });
+
+  it("rejects a cash transaction date in another format (dividend-only files too)", () => {
+    expect(() => parseIbkrFlexXml(flexXml(["20240110", "20240603"], "06/15/2024;093000"))).toThrow(/06\/15\/2024/);
   });
 });

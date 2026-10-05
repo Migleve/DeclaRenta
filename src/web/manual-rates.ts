@@ -19,7 +19,11 @@ import {
   normalizeManualQuote,
   type ManualRateQuote,
 } from "../engine/manual-rates.js";
-import { coerceManualOpeningLots, manualOpeningLotKey } from "../engine/manual-opening-lots.js";
+import {
+  coerceManualOpeningLots,
+  manualOpeningLotKey,
+  normalizeManualOpeningLot,
+} from "../engine/manual-opening-lots.js";
 import { esc } from "./esc.js";
 
 const STORAGE_KEY = "declarenta_manual_rates";
@@ -93,6 +97,15 @@ function writeStoredOpeningLots(entries: StoredManualOpeningLot[]): void {
  */
 export function getManualRates(): EcbRateMap {
   return buildManualRateMap(readStored());
+}
+
+/** Remove every saved manual crypto price, so the next run values nothing by hand. */
+export function clearManualRates(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    /* storage unavailable — nothing to clear */
+  }
 }
 
 export function getManualOpeningLots(): ManualOpeningLot[] {
@@ -226,13 +239,98 @@ function storedRateFor(currency: string, date: string): string {
   return hit?.eurPerUnit ?? "";
 }
 
+function renderClearRatesButton(): string {
+  return `<button type="button" id="crypto-rates-clear-btn" class="btn-secondary">${esc(tr("crypto_rates.clear_btn"))}</button>`;
+}
+
+/**
+ * Collapsed list of the saved prices, shown once every swap is valued. A saved
+ * price makes its row leave the "please value this" table, so without this
+ * list a mistyped price would keep driving the gain with no way to see it.
+ */
+/** One editable row per saved price, oldest date first. */
+function storedRateRows(stored: StoredManualRate[]): string {
+  return [...stored]
+    .sort((a, b) => a.date.localeCompare(b.date) || a.currency.localeCompare(b.currency))
+    .map(
+      (e) => `<tr>
+        <td class="mono">${esc(e.currency)}</td>
+        <td>${esc(e.date)}</td>
+        <td>
+          <input type="text" inputmode="decimal"
+            class="crypto-rate-input"
+            data-currency="${esc(e.currency)}"
+            data-date="${esc(e.date)}"
+            placeholder="${esc(tr("crypto_rates.placeholder"))}"
+            value="${esc(e.eurPerUnit)}" />
+        </td>
+      </tr>`,
+    )
+    .join("");
+}
+
+/** Collapsed list of the saved prices, inside a panel that already has the Save button. */
+function storedRatesList(stored: StoredManualRate[]): string {
+  return `<details class="crypto-rates-stored-inline">
+    <summary class="crypto-rates-stored-summary">
+      <span class="crypto-rates-stored-summary-text">${esc(tr("crypto_rates.stored_title"))}</span>
+      <span class="crypto-rates-stored-summary-count">${stored.length}</span>
+    </summary>
+    <div class="table-wrapper"><table>
+      <thead><tr>
+        <th>${esc(tr("crypto_rates.col_currency"))}</th>
+        <th>${esc(tr("crypto_rates.col_date"))}</th>
+        <th>${esc(tr("crypto_rates.col_eur_per_unit"))}</th>
+      </tr></thead>
+      <tbody>${storedRateRows(stored)}</tbody>
+    </table></div>
+  </details>`;
+}
+
+function renderStoredRatesPanel(stored: StoredManualRate[]): string {
+  const rows = storedRateRows(stored);
+
+  return `<details class="crypto-rates-panel crypto-rates-stored-panel">
+    <summary class="crypto-rates-stored-summary">
+      <span class="crypto-rates-stored-summary-text">${esc(tr("crypto_rates.stored_title"))}</span>
+      <span class="crypto-rates-stored-summary-count">${stored.length}</span>
+    </summary>
+    <div class="crypto-rates-stored-body">
+      <p>${esc(tr("crypto_rates.stored_description"))}</p>
+      <div class="table-wrapper"><table>
+        <thead><tr>
+          <th>${esc(tr("crypto_rates.col_currency"))}</th>
+          <th>${esc(tr("crypto_rates.col_date"))}</th>
+          <th>${esc(tr("crypto_rates.col_eur_per_unit"))}</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <div class="crypto-rates-actions">
+        <button type="button" id="crypto-rates-save-btn" class="btn-cta">${esc(tr("crypto_rates.save_btn"))}</button>
+        ${renderClearRatesButton()}
+      </div>
+      <span class="crypto-rates-saved-msg" hidden>${esc(tr("crypto_rates.saved"))}</span>
+      <p class="muted crypto-rates-recalculate-hint">${esc(tr("crypto_rates.recalculate_hint"))}</p>
+    </div>
+  </details>`;
+}
+
 /**
  * Render the manual-rates panel as an HTML string (so main.ts can inject it
  * alongside the rest of the results). Every broker/user-derived value is
  * escaped. Each row carries data-attributes so `bindManualRatesPanel` can read
  * the inputs back without re-deriving them.
+ *
+ * With nothing left to value it falls back to the collapsed list of saved
+ * prices, or returns "" when none are saved.
  */
 export function renderManualRatesPanel(unresolved: UnresolvedValuation[]): string {
+  const stored = readStored();
+  if (unresolved.length === 0) return stored.length > 0 ? renderStoredRatesPanel(stored) : "";
+  // Prices already saved for swaps that no longer need one stay editable here
+  // too; otherwise a mistyped one could only be removed with "clear all".
+  const savedElsewhere = stored.filter((e) => !unresolved.some((u) => u.currency === e.currency && u.date === e.date));
+
   const rows = unresolved
     .map((u, i) => {
       const prefill = storedRateFor(u.currency, u.date);
@@ -271,7 +369,11 @@ export function renderManualRatesPanel(unresolved: UnresolvedValuation[]): strin
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
-    <button type="button" id="crypto-rates-save-btn" class="btn-cta">${esc(tr("crypto_rates.save_btn"))}</button>
+    ${savedElsewhere.length > 0 ? storedRatesList(savedElsewhere) : ""}
+    <div class="crypto-rates-actions">
+      <button type="button" id="crypto-rates-save-btn" class="btn-cta">${esc(tr("crypto_rates.save_btn"))}</button>
+      ${stored.length > 0 ? renderClearRatesButton() : ""}
+    </div>
     <span class="crypto-rates-saved-msg" hidden>${esc(tr("crypto_rates.saved"))}</span>
     <p class="muted crypto-rates-recalculate-hint">${esc(tr("crypto_rates.recalculate_hint"))}</p>
   </div>`;
@@ -364,17 +466,24 @@ export function renderManualOpeningLotsPanel(messages: TaxMessage[]): string {
         <button type="button" id="manual-opening-lots-clear-btn" class="btn-secondary">${esc(tr("opening_lots.clear_btn"))}</button>
       </div>
       <span class="crypto-rates-saved-msg manual-opening-lots-saved-msg" hidden>${esc(tr("opening_lots.saved"))}</span>
+      <span class="manual-opening-lots-error-msg" role="alert" hidden>${esc(tr("opening_lots.row_invalid"))}</span>
       <p class="muted crypto-rates-recalculate-hint">${esc(tr("opening_lots.recalculate_hint"))}</p>
     </div>
   </details>`;
 }
 
 /**
- * Wire the save button after the panel HTML has been injected into `container`.
- * On save: reads each non-empty input, persists it via setManualRate, then
- * invokes `onSave` (which re-runs the report so the new rates take effect).
+ * Wire the save and clear buttons after the panel HTML has been injected into
+ * `container`. On save: reads each non-empty input, persists it via
+ * setManualRate, then invokes `onSave` (which re-runs the report so the new
+ * rates take effect). On clear: drops every saved price and re-runs.
  */
 export function bindManualRatesPanel(container: HTMLElement, onSave: () => void): void {
+  container.querySelector<HTMLButtonElement>("#crypto-rates-clear-btn")?.addEventListener("click", () => {
+    clearManualRates();
+    onSave();
+  });
+
   const btn = container.querySelector<HTMLButtonElement>("#crypto-rates-save-btn");
   if (!btn) return;
 
@@ -453,6 +562,8 @@ export function bindManualOpeningLotsPanel(container: HTMLElement, onSave: () =>
   btn.addEventListener("click", () => {
     let savedCount = 0;
     const groups = [...container.querySelectorAll<HTMLElement>(".manual-opening-lot-group")];
+    const toSave: { groupKey: string; lots: ManualOpeningLot[] }[] = [];
+    let invalidRows = 0;
     for (const group of groups) {
       const rows = [...group.querySelectorAll<HTMLTableRowElement>(".manual-opening-lot-row")];
       const symbol = group.dataset.symbol ?? "";
@@ -467,7 +578,7 @@ export function bindManualOpeningLotsPanel(container: HTMLElement, onSave: () =>
         const acquireDate = row.querySelector<HTMLInputElement>("[data-field='acquireDate']")?.value.trim() ?? "";
         const quantity = row.querySelector<HTMLInputElement>("[data-field='quantity']")?.value.trim() ?? "";
         const pricePerShare = row.querySelector<HTMLInputElement>("[data-field='pricePerShare']")?.value.trim() ?? "";
-        return {
+        const lot = {
           symbol,
           description,
           isin,
@@ -478,12 +589,35 @@ export function bindManualOpeningLotsPanel(container: HTMLElement, onSave: () =>
           quantity,
           pricePerShare,
         };
+        // Flag a partly filled or unreadable row instead of dropping it
+        // silently; a row left completely empty is simply ignored.
+        const invalid =
+          (acquireDate !== "" || quantity !== "" || pricePerShare !== "") && normalizeManualOpeningLot(lot) === null;
+        row.querySelectorAll<HTMLInputElement>(".manual-opening-lot-input").forEach((input) => {
+          if (invalid) input.setAttribute("aria-invalid", "true");
+          else input.removeAttribute("aria-invalid");
+        });
+        if (invalid) invalidRows++;
+        return lot;
       });
 
-      savedCount += setManualOpeningLots(groupKey, lots);
+      toSave.push({ groupKey, lots });
     }
 
     const msg = container.querySelector<HTMLElement>(".manual-opening-lots-saved-msg");
+    const errorMsg = container.querySelector<HTMLElement>(".manual-opening-lots-error-msg");
+    if (errorMsg) errorMsg.hidden = invalidRows === 0;
+    // Save nothing while a row is flagged: saving recalculates and re-renders
+    // the panel, which would wipe the row the user still has to fix.
+    if (invalidRows > 0) {
+      if (msg) msg.hidden = true;
+      return;
+    }
+
+    for (const { groupKey, lots } of toSave) {
+      savedCount += setManualOpeningLots(groupKey, lots);
+    }
+
     if (msg) msg.hidden = savedCount === 0;
 
     if (savedCount > 0) onSave();

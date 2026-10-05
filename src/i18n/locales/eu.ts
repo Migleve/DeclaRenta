@@ -40,11 +40,18 @@ const eu: TranslationKeys = {
   "results.filter_losses": "Galerak",
   "results.export_json": "Esportatu JSON",
   "results.export_csv": "Esportatu CSV",
+  "results.export_csv_title": "«,» bereizlea eta puntudun hamartarrak: programetarako eta ingelesezko kalkulu-orrietarako",
+  "results.export_csv_excel": "Esportatu CSV Excelerako (ES)",
+  "results.export_csv_excel_title": "«;» bereizlea eta komadun hamartarrak: zutabetan irekitzen da klik bikoitzarekin Excel espainieraz dagoenean",
   "results.export_pdf": "Esportatu PDF",
   "results.operations_count": "{{count}} eragiketa",
   "results.dividends_count": "{{count}} dibidendu",
+  "results.newer_years_notice": "{{year}} erakusten da; zure datuek {{years}} ere hartzen dute.",
   "results.year_mismatch":
     "Fitxategiak {{available}} ekitaldietako datuak ditu, baina hautatutako ekitaldia {{year}} da. Hautatu beste urte bat goiko zerrendan.",
+  "results.settings_used": "Kalkuluaren ezarpenak: monodibisa {{monodivisa}}, titularrak {{titulares}}, auto-bihurketak {{autoconvert}}",
+  "results.setting_yes": "bai",
+  "results.setting_no": "ez",
 
   "table.isin": "ISIN",
   "table.symbol": "Sinboloa",
@@ -67,9 +74,15 @@ const eu: TranslationKeys = {
   "table.concept": "Kontzeptua",
   "table.amount_eur": "Zenbatekoa (EUR)",
   "table.currency": "Moneta",
+  "table.fx_origin": "Jatorria",
+  "table.fx_lot": "FIFO lotea",
+  "fx.trigger.conversion": "Dibisa-bihurketa",
+  "fx.trigger.dividend": "Dibidendua",
+  "fx.trigger.interest": "Interesak",
+  "fx.trigger.commission": "Komisioa",
+  "fx.trigger.stock_purchase": "Balore-erosketa",
+  "fx.trigger.stock_sale": "Balore-salmenta",
 
-  "casilla.transmission_value": "Transmisio-balioa (transmisio guztiak)",
-  "casilla.acquisition_value": "Eskuratze-balioa (transmisio guztiak)",
   "casilla.listed_transmission_value": "Transmisio-balioa (negoziatutako akzioak)",
   "casilla.listed_acquisition_value": "Eskuratze-balioa (negoziatutako akzioak)",
   "casilla.acquisition_sale_rate_note":
@@ -89,6 +102,7 @@ const eu: TranslationKeys = {
   "casilla.spanish_withholding_detail":
     "Espainiako jaulkitzaileen dibidendu edo interesen gainean jatorrian egindako PFEZ atxikipena (adib. IBEX akzioak), atzerriko artekari batean egon arren. Kuotatik kentzeko konturako ordainketa da; EZ da nazioarteko zergapetze bikoitzaren kenkaria (0588 laukia), atzerriko zergari soilik aplikatzen zaiona.",
   "casilla.double_taxation": "Zergapetze bikoitzaren kenkaria",
+  "casilla.dt_foreign_income_total": "Atzerriko errendimenduak guztira",
   "casilla.reintegrated_losses":
     "Aurreko urteetako galera atzeratuak orain kengarriak (berrerositako balioak saldu ziren): {{amount}} EUR",
   "casilla.blocked_losses":
@@ -97,12 +111,36 @@ const eu: TranslationKeys = {
   "messages.errors_title": "{{count}} errore — arreta behar du",
   "messages.warnings_title": "{{count}} abisu — berrikusi",
   "messages.info_title": "{{count}} ohar informatibo",
+  "pdf.severity_error": "Errorea",
+  "pdf.severity_warning": "Abisua",
+  "pdf.severity_info": "Oharra",
   "pdf.section_messages": "Mezuak",
 
   "chart.asset_distribution": "Aktibo motaren araberako banaketa",
   "chart.monthly_gl": "Hileko irabazi/galera",
   "chart.currency_composition": "Dibisa konposizioa",
   "chart.withholdings_country": "Atxikipenak herrialdearen arabera",
+  "chart.month_1": "Urt",
+  "chart.month_2": "Ots",
+  "chart.month_3": "Mar",
+  "chart.month_4": "Api",
+  "chart.month_5": "Mai",
+  "chart.month_6": "Eka",
+  "chart.month_7": "Uzt",
+  "chart.month_8": "Abu",
+  "chart.month_9": "Ira",
+  "chart.month_10": "Urr",
+  "chart.month_11": "Aza",
+  "chart.month_12": "Abe",
+  "asset.stk": "Akzioak",
+  "asset.fund": "Funtsak / ETFak",
+  "asset.opt": "Opzioak",
+  "asset.fop": "Etorkizunen gaineko opzioak",
+  "asset.crypto": "Kriptomonetak",
+  "asset.bond": "Bonuak",
+  "option.expiration": "Iraungitzea",
+  "option.close": "Aurretiazko itxiera",
+  "option.exercise": "Erabilera/Esleipena",
 
   "footer.docs": "Dokumentazioa",
   "footer.privacy": "Self-hosted · Pribatutasun osoa",
@@ -119,6 +157,9 @@ const eu: TranslationKeys = {
   "a11y.theme_toggle": "Gaia aldatu",
   "a11y.drop_zone": "Fitxategiak igotzeko eremua",
   "a11y.file_input": "Fitxategiak hautatu",
+  "a11y.ops_search": "Bilatu eragiketak ISIN edo sinboloz",
+  "a11y.ops_filter": "Iragazi eragiketak emaitzaren arabera",
+  "a11y.remove_file": "Kendu {{name}}",
 
   "theme.toggle": "Gaia aldatu",
 
@@ -161,8 +202,14 @@ const eu: TranslationKeys = {
   "compare.saved_reports": "Gordetako txostenak",
   "compare.clear_history": "Historiala ezabatu",
   "compare.clear_confirm": "Gordetako txosten guztiak ezabatu?",
+  "compare.transmission_value": "Transmisio-balioa (transmisioak, dibisarik gabe)",
+  "compare.acquisition_value": "Eskuratze-balioa (transmisioak, dibisarik gabe)",
+  "compare.net_gain_loss": "Irabazi/Galera garbia (transmisioak, dibisarik gabe)",
 
-  "error.no_broker_detected": 'Ezin izan da "{{filename}}" fitxategiaren brokerra detektatu. Hautatu brokerra eskuz.',
+  "error.no_broker_detected":
+    'Ezin izan da "{{filename}}" fitxategiaren brokerra detektatu. Broker baten txostena bada, hautatu brokerra eskuz; bestela, kendu zerrendatik.',
+  "error.empty_file":
+    '"{{filename}}" fitxategia hutsik dago. Kendu zerrendatik edo esportatu berriro zure brokerretik.',
   "error.file_too_large":
     '"{{filename}}" fitxategiak {{limit}} MB-ko muga gainditzen du eta baztertu egin da. Esportatu epe laburragoa edo zatitu fitxategia.',
   "error.prefix": "Errorea: ",
@@ -178,11 +225,12 @@ const eu: TranslationKeys = {
   "sidebar.toggle": "Menua ireki/itxi",
 
   "profile.title": "Profil fiskala",
-  "profile.description": "Datu hauek 720 eta D-6 ereduen fitxategiak sortzeko erabiltzen dira.",
+  "profile.description": "Datu hauek 720 eta D-6 ereduen fitxategiak sortzeko erabiltzen dira. Nabigatzaile honetan bakarrik gordetzen dira, inoiz ez zerbitzari batean.",
   "profile.section_personal": "Datu pertsonalak",
   "profile.section_declaration": "Aitorpenaren konfigurazioa",
   "profile.nif_label": "NIF/NIE:",
-  "profile.nif_placeholder": "12345678A",
+  "profile.nif_placeholder": "12345678Z",
+  "profile.nif_invalid": "NIF/NIE hau ez da baliozkoa: egiaztatu digituak eta kontrol-letra.",
   "profile.surname_label": "Abizenak:",
   "profile.surname_placeholder": "García López",
   "profile.name_label": "Izena:",
@@ -203,6 +251,8 @@ const eu: TranslationKeys = {
     "Kontuak hainbat titular baditu (adib. kontu bateratua edo irabazpidezkoa), DeclaRentak zenbateko guztiak zati berdinetan banatzen ditu zergadun bakoitzari dagokion partea erakusteko (LIRPF 11.3 art.). Titular bakoitzak bere aitorpen indibiduala aurkezten du bere partearengatik.",
   "profile.saved": "Profila gordeta",
   "profile.save_btn": "Profila gorde",
+  "profile.clear_btn": "Ezabatu nire datuak nabigatzaile honetatik",
+  "profile.clear_confirm": "Nabigatzaile honetatik ezabatu zure profil fiskala, gordetako txostenak eta eskuz sartutako balioak?",
   "profile.incomplete_banner": "Osatu zure profil fiskala 720 eta D-6 ereduak sortzeko.",
   "profile.go_to_profile": "Profilara joan",
 
@@ -219,7 +269,7 @@ const eu: TranslationKeys = {
     "Konfigurazioan, gaitu atal hauek:<ul><li><strong>Trades</strong> (nahitaezkoa)</li><li><strong>Cash Transactions</strong> — dibidenduak eta atxikipenak (nahitaezkoa)</li><li><strong>Open Positions</strong> — 720 Eredu/D-6-rako (gomendatua)</li><li><strong>Financial Instrument Information</strong> (gomendatua)</li></ul>",
   "guide.ibkr.step5":
     "Atal bakoitzean, <strong>hautatu eremu guztiak</strong> (markatu lauki guztiak). Zenbat eta datu gehiago sartu, orduan eta kalkulua zehatzagoa. Gutxienez, ziurtatu <strong>Notes</strong> eremua Trades atalean sartzen duzula — dibisa bihurtzeen detekziorako beharrezkoa da.",
-  "guide.ibkr.step6": "Irteera-formatua: <strong>XML</strong>",
+  "guide.ibkr.step6": "Irteera-formatua: <strong>XML</strong>. <em>Date Format</em> aukeran, utzi <strong>yyyyMMdd</strong>",
   "guide.ibkr.step7": "Sartu <strong>eskuragarri dauden urte guztiak</strong> FIFO kalkulu zuzenerako",
   "guide.ibkr.step8": "Gorde kontsulta, exekutatu eta deskargatu <code>.xml</code> fitxategia",
   "guide.degiro.title": "Degiro (CSV)",
@@ -236,7 +286,7 @@ const eu: TranslationKeys = {
     "Joan <strong>Mugimenduak</strong> \u2192 <strong>Depotums\u00e4tze</strong> (zorroaren mugimenduak) atalera",
   "guide.flatex.step3": "Hautatu <strong>historia osoa</strong> (FIFOrako beharrezkoa) eta esportatu CSV fitxategia",
   "guide.flatex.step4":
-    "Dibidenduetarako: joan <strong>Kontoums\u00e4tze</strong> (kontuaren mugimenduak) atalera, data-tarte bera, eta esportatu CSVa",
+    "Dibidenduetarako: joan <strong>Kontoums\u00e4tze</strong> (kontuaren mugimenduak) atalera, data-tarte bera, eta esportatu CSVa. Kontuz: han dibidenduak zenbateko garbiarekin agertzen dira, atxikipena kenduta; hartu zenbateko osoa eta atxikipena dibidendu bakoitzaren PDF egiaztagiritik",
   "guide.flatex.step5":
     "Igo <strong>bi CSV fitxategiak</strong> (Depotums\u00e4tze eragiketetarako eta Kontoums\u00e4tze dibidenduetarako)",
   "guide.etoro.title": "eToro (XLSX)",
@@ -319,20 +369,56 @@ const eu: TranslationKeys = {
   "m720.title": "720 Eredua — Atzerriko ondasunak",
   "m720.description": "Atzerrian dauden ondasun eta eskubideei buruzko aitorpen informatiboa.",
   "m720.threshold_exceeded": "Zure posizioen arabera ({{amount}} €), 720 Eredua aurkeztera behartuta zaude.",
+  "m720.obliged_by_changes": "720 Eredua aurkeztu behar duzu azken aitorpenetik izandako aldaketengatik: goiko kategoria bakoitzak arrazoia adierazten du.",
+  "m720.declared_account_missing": "Aitortu zenuen kontu batek ez du saldorik aurten ({{accounts}}): itxi baduzu, haren ezeztapena eskuz aitortu behar duzu (RGATaren 42 bis.5 art.).",
   "m720.threshold_not_exceeded":
     "Ez duzu 50.000 €-ko atalasea gainditzen (guztira: {{amount}} €). Ez zaude aurkeztera behartuta.",
   "m720.category_v": "Balore-paperak (akzioak, funtsak, bonuak)",
   "m720.category_c": "Kontuak (eskudiruzko saldoak)",
   "m720.category_exceeded": "50.000 € gainditzen du — aitorpena derrigorrezkoa",
   "m720.category_not_exceeded": "Atalasearen azpitik",
+  "m720.category_undetermined": "Ezin da zehaztu: {{count}} posizio baloratu gabe",
   "m720.no_positions": "Igo posizio irekiak dituen txostena 100 Ereduan 720 Eredua aztertzeko.",
+  "m720.brokers_without_holdings": "Igo dituzun {{brokers}}(r)en datuek ez dituzte abenduaren 31ko posizioak eta saldoak jasotzen, eta, beraz, ez dira hemen batzen. Egiaztatu {{brokers}}(r)en urte amaierako laburpenean atzerriko kontuen saldoak edo atzerriko akzio eta funtsen balioak 50.000 € gainditzen dituen.",
   "m720.positions_title": "Aitortu beharreko posizioak",
   "m720.positions_unvalued":
-    "{{count}} posizio ezin izan dira eurotan baloratu (ez dago kanbio-tasarik eskuragarri haien monetarako ekitaldi-amaieran) eta totaletik kanpo utzi dira. Kalkulatu haien euro-balioa eta sartu eskuz.",
+    "{{count}} posizio ezin izan dira eurotan baloratu (ez dago merkatu-preziorik edo kanbio-tasarik haien monetarako ekitaldi-amaieran) eta totaletik kanpo utzi dira. Kalkulatu haien euro-balioa eta sartu eskuz.",
   "m720.cash_title": "Eskudiruzko saldoak (Kontuak)",
   "m720.q4_average": "Q4 batez bestekoa",
   "m720.cash_missing_average":
-    "Saldo batzuek ez dute 720 Ereduko kontuetarako beharrezkoa den laugarren hiruhilekoko batez bestekoa. Berrikusteko erakusten dira, baina ez dira sortutako fitxategian sartzen.",
+    "Saldo batzuek ez dute 720 Ereduko kontuetarako beharrezkoa den laugarren hiruhilekoko batez bestekoa. Abenduaren 31ko saldoa 50.000 €-ko atalaserako kontatzen da, baina kontu horiek ez dira sortutako fitxategian sartzen: gehitu itzazu eskuz, laugarren hiruhilekoko batez besteko saldoarekin, aurkeztu aurretik.",
+  "m720.omitted_title":
+    "Ondasun hauek ez dira fitxategian sartzen, eta eskuz aitortu behar dituzu 720 Ereduaren inprimakian:",
+  "m720.omitted_no_isin":
+    "ez du ISINik; inprimakian «Z» eta jaulkitzailearen herrialde-kodea erabiliz identifikatzen da",
+  "m720.omitted_no_country":
+    "gordailuan edo kokatuta dagoen herrialdea falta da",
+  "m720.omitted_no_account":
+    "kontu-zenbakia falta da",
+  "m720.omitted_invalid_code":
+    "aurten saldua; aurreko 720 Ereduak fitxategiak onartzen ez duen gako edo herrialde batekin aitortu zuen",
+  "m720.not_generated_left_out":
+    "Ez da fitxategirik sortu: aitortu behar duzunetik ezer ezin da fitxategian idatzi. Aitortu eskuz 720 Ereduaren inprimakian, goiko oharrei jarraituz.",
+  "m720.successive_years_note":
+    "Aurreko urte batean 720 Eredua aurkeztu bazenuen, berriro aurkeztea derrigorrezkoa da soilik kategoria baten balio bateratua azken aitorpenarekiko 20.000 € baino gehiago igo denean, edo aitortu zenuen ondasun bat saldu edo ezeztatu duzunean (1065/2007 EDaren 42 bis.5 eta 42 ter.5 artikuluak). Bestela, aurkeztea aukerakoa da.",
+  "m720.previous_title": "Zure azken 720 Eredua",
+  "m720.previous_help": "720 Eredua lehendik aurkeztu baduzu, igo zure azken aitorpenaren .txt fitxategia. Lehendik aitortutakoak M jatorria izango du, saldutakoak C jatorria (baja), eta 20.000 €-ko araua aplikatuko da. Fitxategia zure nabigatzailean irakurtzen da eta ez da gordetzen.",
+  "m720.previous_loaded": "Kargatuta: {{name}} ({{year}} ekitaldia): {{securities}} balore eta {{accounts}} kontu aitortuta.",
+  "m720.previous_clear": "Kendu",
+  "m720.previous_invalid": "Fitxategi hau ez da 720 Eredua: ez du xehetasun-erregistrorik.",
+  "m720.previous_same_year": "Fitxategi hau {{fileYear}} ekitaldikoa da. Igo {{year}} baino lehenagoko ekitaldi baten 720 Eredua.",
+  "m720.origin": "Jatorria",
+  "m720.origin_a": "A (alta)",
+  "m720.origin_m": "M (lehendik aitortua)",
+  "m720.successive_last": "Azken aitorpena: {{previous}} €. Aldaketa: {{change}} €.",
+  "m720.successive_increase": "20.000 € baino gehiago igo da: berriro aitortu behar da",
+  "m720.successive_sold": "Aitortutako baloreak saldu dituzu: horien bajak aitortu behar dira",
+  "m720.successive_optional": "Ez da 20.000 € baino gehiago igo: berriro aitortzea aukerakoa da",
+  "m720.successive_not_required": "Zure azken 720 Ereduaren arabera, aurten ez zaude aurkeztera behartuta: kategoria bakar bat ere ez da 20.000 € baino gehiago igo eta ez duzu aitortutakorik saldu. Nahi baduzu, aurkez dezakezu.",
+  "m720.sold_title": "Bajak: zure azken 720 Eredutik saldutako baloreak",
+  "m720.sold_help": "Fitxategiak C jatorriarekin jasotzen ditu, azken salmentaren data eta zenbatekoarekin.",
+  "m720.sold_no_date": "{{year}} ekitaldian ez dago aitortutako akzioen salmentarik: baja iraungitze-datarik gabe eta 0 balorazioarekin ateratzen da; osatu aurkeztu aurretik",
+  "m720.sold_no_acquisition": "datuek ez dute erosketa jasotzen: baja eskuratze-datarik gabe ateratzen da; osatu aurkeztu aurretik",
   "m720.generate_btn": "720 Ereduaren fitxategia sortu",
   "m720.deadline": "Epea: urtarrilaren 1etik martxoaren 31ra hurrengo urtean",
   "m720.total_value": "Balio osoa: {{amount}} €",
@@ -349,9 +435,10 @@ const eu: TranslationKeys = {
   "d6.no_minimum":
     "ICT/1408/2021 Aginduaz geroztik, D-6 soilik nahitaezkoa da zure partaidetza atzerriko enpresa kotizatu baten kapitalaren edo boto-eskubideen <strong>%10 edo gehiago</strong> bada. Txikizkako inbertitzaile gehienak salbuetsita daude.",
   "d6.no_positions": "Igo posizio irekiak dituen txostena 100 Ereduan D-6 aztertzeko.",
+  "d6.brokers_without_holdings": "Igo dituzun {{brokers}}(r)en datuek ez dituzte abenduaren 31ko baloreak jasotzen, eta, beraz, ez dira hemen agertzen. Kontsultatu {{brokers}}(r)en urte amaierako laburpenean.",
   "d6.positions_title": "Aitortu beharreko posizioak",
   "d6.positions_unvalued":
-    "{{count}} posizio ezin izan dira eurotan baloratu (ez dago kanbio-tasarik eskuragarri haien monetarako ekitaldi-amaieran) eta totaletik kanpo utzi dira. Kalkulatu haien euro-balioa eta sartu eskuz.",
+    "{{count}} posizio ezin izan dira eurotan baloratu (ez dago merkatu-preziorik edo kanbio-tasarik haien monetarako ekitaldi-amaieran) eta totaletik kanpo utzi dira. Kalkulatu haien euro-balioa eta sartu eskuz.",
   "d6.cancellations_title": "Baliogabetzeak",
   "d6.generate_btn": "D-6 gida sortu",
   "d6.deadline": "Epea: urtarrilaren 1etik 31ra hurrengo urtean",
@@ -370,7 +457,10 @@ const eu: TranslationKeys = {
   "m721.threshold_exceeded": "Zure posizioen arabera ({{amount}} €), 721 Eredua aurkeztera behartuta zaude.",
   "m721.threshold_not_exceeded":
     "Ez duzu 50.000 €-ko atalasea gainditzen (guztira: {{amount}} €). Ez zaude aurkeztera behartuta.",
+  "m721.threshold_undetermined":
+    "Ezin da zehaztu 50.000 €-ko atalasea gainditzen duzun: guztirakoak ({{amount}} €) ez ditu barne hartzen baloratu gabeko {{count}} posizio. Baloratu itzazu aurkeztu behar ez duzula ondorioztatu aurretik.",
   "m721.no_positions": "Igo kriptomoneda posizioak dituen txostena 100 Ereduan 721 Eredua aztertzeko.",
+  "m721.brokers_without_holdings": "Igo dituzun {{brokers}}(r)en datuek ez dituzte abenduaren 31ko kriptomonetak jasotzen, eta, beraz, ez dira hemen batzen. Egiaztatu {{brokers}}(r)en urte amaierako laburpenean atzerrian dituzun kriptomonetek 50.000 € gainditzen dituzten.",
   "m721.positions_title": "Aitortu beharreko posizioak",
   "m721.generate_btn": "721 Ereduaren fitxategia sortu",
   "m721.deadline": "Epea: urtarrilaren 1etik martxoaren 31ra hurrengo urtean",
@@ -386,7 +476,7 @@ const eu: TranslationKeys = {
   "m721.format_notice":
     "AEATen formatu ofiziala XML da (HFP/886/2023 Agindua). DeclaRentak berrikuspen orientagarria bakarrik erakusten du: sorrera ofiziala desgaituta dago balioztatutako XMLa inplementatu arte.",
   "m721.positions_unvalued":
-    "{{count}} posizio ezin izan dira eurotan baloratu (ez dago kanbio-tasarik eskuragarri haien monetarako ekitaldi-amaieran) eta totaletik kanpo utzi dira. Kalkulatu haien euro-balioa eta sartu eskuz.",
+    "{{count}} posizio ezin izan dira eurotan baloratu (ez dago merkatu-preziorik edo kanbio-tasarik haien monetarako ekitaldi-amaieran) eta totaletik kanpo utzi dira. Kalkulatu haien euro-balioa eta sartu eskuz.",
   "m721.empty_title": "Ez dago kriptomoneda posiziorik kargatuta",
   "m721.empty_description":
     "721 Eredua aitorpen informatibo nahitaezkoa da atzerriko exchange-etan 50.000 € baino gehiagoko kriptomonedak badituzu. Igo zure brokerraren txostena 100 Ereduaren atalean, DeclaRentak automatikoki kalkulatu dezan atalasea gainditzen duzun. Epea: urtarrilaren 1etik martxoaren 31ra.",
@@ -395,6 +485,14 @@ const eu: TranslationKeys = {
 
   "section.year_label": "Ekitaldia",
   "section.profile_source": '<a href="#perfil">Profil fiskaleko</a> datuak',
+  "section.positions_date_mismatch":
+    "Zure fitxategiko posizioak {{date}} datakoak dira, ez 31/12/{{year}} datakoak. Eredu hauek abenduaren 31n zenuena aitortzen dute, beraz, ez da fitxategirik sortzen haiekin. Deskargatu 31/12/{{year}} egunean amaitzen den txosten bat (IBKRn, amaiera-data 31/12/{{year}} duen Flex Query bat) eta igo berriro.",
+  "section.positions_date_unknown":
+    "Zure brokerrak ez du adierazten posizioak zein datatakoak diren. Egiaztatu txostenak 31/12/{{year}} egunean zenuena islatzen duela: geroago deskargatu bazenuen, posizioak eta haien balioak ez dira bat etorriko agian.",
+  "merge.holdings_other_date":
+    "{{account}} kontuaren {{date}} datako posizioak eta saldoak 720, 721 eta D-6 ereduetatik kanpo geratu dira: ez dira 31/12/{{year}} egunekoak.",
+  "merge.holdings_other_date.hint":
+    "Fitxategi hori beste data batean amaitzen da. Haren eragiketak eta mugimenduak kontuan hartzen dira, baina eredu hauek abenduaren 31n zenuena aitortzen dute, beraz, haren posizioak eta saldoak ez dira batzen. 31/12/{{year}} eguneko kontu horren txostena falta bazaizu, igo hori ere.",
 
   "badge.complete": "Osatuta",
   "badge.pending": "Zain",
@@ -446,6 +544,10 @@ const eu: TranslationKeys = {
   "annex.title": "Eragiketen eranskina (Anexo C1)",
   "annex.subtitle": "Eragiketen banakako xehetasuna aktibo motaren arabera taldekatuta.",
   "annex.operations": "eragiketa",
+  "annex.wash_blocked": "Berrerosketagatik blokeatutako galera: {{amount}} EUR (LIRPF 33.5 art.)",
+  "annex.wash_dates": "Galera blokeatzen duten balio bereko erosketak: {{dates}}",
+  "annex.wash_hint":
+    "Renta Web-en, markatu salmenta hau «Egotzi ezin diren ondare-galerak» gisa. Galera berrerosi duzuna saltzen duzunean aplikatuko da.",
 
   // Tax bracket estimation
   "chart.tax_estimate": "Zerga-estimazioa (aurrezki-oinarria)",
@@ -479,7 +581,7 @@ const eu: TranslationKeys = {
   "guide_rw.double_taxation_title": "Nazioarteko zergapetze bikoitzagatiko kenkaria",
   "guide_rw.entidad_emisora_label": "Entitate jaulkitzailea",
   "guide_rw.entidad_emisora_value":
-    "Broker-aren izena (adib. Interactive Brokers, Degiro, eToro…). Eragiketa bat baino gehiago lerro batean konsolidatzen badituzu, adierazi broker nagusia.",
+    "Saltzen duzun enpresaren edo baloreren izena (adib. Apple Inc.), ez broker-arena. Dibisetan, moneta (adib. USD). Eragiketa bat baino gehiago lerro batean konsolidatzen badituzu, adierazi balore nagusia.",
   "guide_rw.tipo_elemento_label": "Ondare elementu mota",
   "guide_rw.tipo_elemento_value_capital":
     "Hautatu <strong>«Negoziaziora onartutako akzioak»</strong> kotizatutako akzioetarako. Funts-etarako: «IIC-eko partaidetzak». Deribatu/opsioetarako: «Beste ondare elementu batzuk».",
@@ -519,7 +621,7 @@ const eu: TranslationKeys = {
     "DeclaRenta-ren <strong>0588</strong> gelaxkako zenbatekoa. Atzerrian ordaindutako zergaren eta Espainiako kuota dagokionaren arteko txikiena da (80. art. LIRPF).",
   "guide_rw.dt_campo_label": "Zein eremutan koadroan?",
   "guide_rw.dt_campo_hint":
-    "Zergapetze bikoitzaren koadroan, bete BI lerro:<br>• <strong>«Atzerrian lortutako beste errendimendu garbi murriztuak»</strong> (2. lerroa) → atzerriko dibidenduen zenbateko gordina (0029 gelaxkako balio bera).<br>• <strong>«Atzerrian ordaindutako zerga»</strong> (azken lerroa) → DeclaRenta-ren 0588 gelaxkako zenbatekoa.<br>2. lerroa hutsik uzten baduzu, Renta Web-ek abisu bat erakusten du errentak falta direlako. 1. eta 3. lerroak 0-n geratzen dira.",
+    "Zergapetze bikoitzaren koadroan, bete BI lerro herrialde bakoitzeko:<br>• <strong>«Atzerrian lortutako beste errendimendu garbi murriztuak»</strong> (2. lerroa) → herrialde horren «Gordina EUR» zutabea, DeclaRenta-ren 0588 gelaxkaren xehetasunean. Herrialde bakarra baduzu, xehetasun horretako «Atzerriko errendimenduak guztira» lerroa da. Ez ditu barne hartzen Espainiako dibidenduak, ezta atxikipenik gabeko herrialdeetakoak ere.<br>• <strong>«Atzerrian ordaindutako zerga»</strong> (azken lerroa) → herrialde horren kenkaria, xehetasun berean (herrialde bakarrarekin, 0588 gelaxkako zenbatekoa).<br>2. lerroa hutsik uzten baduzu, Renta Web-ek abisu bat erakusten du errentak falta direlako. 1. eta 3. lerroak 0-n geratzen dira.",
   "guide_rw.capital_gains_note":
     "Eragiketa asko badituzu, lerro bakarrean konsolidatu ditzakezu aktibo mota bakoitzeko 01/01 eta 31/12 data generikoak erabiliz. Renta Web-ek zenbateko agregatuak onartzen ditu.",
   "guide_rw.fx_note":
@@ -570,6 +672,10 @@ const eu: TranslationKeys = {
   "crypto_rates.save_btn": "Gorde eta birkalkulatu",
   "crypto_rates.saved": "Gordeta",
   "crypto_rates.recalculate_hint": "Balioak zure nabigatzailean gordetzen dira eta txostena birkalkulatzen da.",
+  "crypto_rates.stored_title": "Gordetako eskuzko prezioak",
+  "crypto_rates.stored_description":
+    "Euro prezio hauek zure nabigatzailean gordeta daude eta fitxategi bat prozesatzen duzun bakoitzean aplikatzen dira. Zuzendu balio bat eta gorde, edo ezabatu guztiak bat okerra bada.",
+  "crypto_rates.clear_btn": "Ezabatu gordetako prezioak",
 
   // Manual opening lots for transferred positions
   "opening_lots.title": "Eskuzko loteak transferitutako posizioentzat",
@@ -594,6 +700,8 @@ const eu: TranslationKeys = {
   "opening_lots.save_btn": "Gorde loteak eta birkalkulatu",
   "opening_lots.clear_btn": "Ezabatu gordetako loteak",
   "opening_lots.saved": "Gordeta",
+  "opening_lots.row_invalid":
+    "Berrikusi markatutako errenkadak: adierazi erosketa-data eta zero baino handiagoak diren kantitatea eta prezioa (adib. 1.234,56). Ez da ezer gorde.",
   "opening_lots.recalculate_hint": "Eskuzko loteak zure nabigatzailean gordetzen dira eta txostena birkalkulatzen da.",
 
   // Motorraren eta analizatzaileen mezuak (TaxMessage id → testu lokalizatua)
@@ -614,24 +722,41 @@ const eu: TranslationKeys = {
   "fifo.roll_operation": "⚠ C;O eragiketa (roll): {{symbol}} {{date}} egunean. Itxiera + irekiera gisa prozesatzen da.",
   "fifo.roll_operation.hint":
     "Roll eragiketa zuzen prozesatu da, aurreko posizioaren itxiera eta berriaren irekiera gisa.",
+  "fifo.unknown_direction": '⚠ Norabide ezezaguneko eragiketa ("{{buySell}}"): {{symbol}} {{date}} egunean. Ez da prozesatu.',
+  "fifo.unknown_direction.hint": "Erosketak (BUY) eta salmentak (SELL) bakarrik prozesatzen dira. Berrikusi errenkada hau brokerraren fitxategian eta, benetako eragiketa bada, zuzendu haren norabidea.",
   "fifo.split_applied": "⚡ Split {{isin}} {{ratio}} ({{direction}}) aplikatua ({{date}})",
   "fifo.split_applied.hint":
     "Split-a lote guztiei aplikatu zaie. Kostu osoa mantentzen da — akzio kopurua bakarrik aldatzen da.",
+  "fifo.split_unresolved": "⚠ {{symbol}}-ren split-a ({{date}}) ez da aplikatu: ez dago aurreko akziorik proportzioa kalkulatzeko.",
+  "fifo.split_unresolved.hint":
+    "Igo aurreko urteetako laburpenak ere, kontua ireki zenetik. Bestela, akzio kopurua eta balio honen ondorengo salmenten kostua ez dira zuzenak izango.",
   "fifo.merger_applied":
     "🔄 Bat-egitea: {{oldIsin}} → {{newIsin}} (ratioa {{ratio}}, {{lotsTransferred}} lote transferituak, {{date}})",
   "fifo.merger_applied.hint":
     "Zerga-neutroa den bat-egitea: loteak ISIN berrira transferitzen dira jatorrizko kostu-oinarria mantenduz.",
+  "fifo.cash_merger_disposal":
+    "💶 Eskudiruzko erosketa: {{symbol}} ({{isin}}) × {{quantity}} {{date}} egunean. Salmenta gisa aitortzen da.",
+  "fifo.cash_merger_disposal.hint":
+    "Eskudirutan ordaindutako bat-egitea edo erosketa eskualdaketa bat da: irabazia edo galera salmenta batean bezala kalkulatzen da, jasotako eskudirua eskualdaketa-balio gisa hartuta.",
   "fifo.spinoff_applied":
     "🔀 Spin-off: {{parentIsin}} → {{newIsin}} (ratioa {{ratio}}, kostuaren {{costPercent}}% spin-off-era, {{date}})",
   "fifo.spinoff_applied.hint": "Kostua proportzionalki banatzen da matrizearen eta enpresa eskindituaren artean.",
+  "fifo.corporate_action_unhandled":
+    "ℹ {{symbol}} ({{isin}}) balioaren {{type}} ekintza korporatiboa ({{date}}): ez da FIFO kalkuluan aplikatzen.",
+  "fifo.corporate_action_unhandled.hint":
+    "Posizioaren akzio kopurua edo ISINa aldatu bazen, berrikusi balio honen ondorengo salmenten kostua.",
   "fifo.sell_without_lots":
-    "⚠ Saltzea loterik gabe: {{symbol}} ({{isin}}) × {{quantity}} {{date}} egunean. Kostu-oinarria = 0 (litekeena da posizio laburra edo aurreko datu osatugabeak).",
+    "⚠ Saltzea loterik gabe: {{symbol}}{{isinSuffix}} × {{quantity}} {{date}} egunean. Kostu-oinarria = 0 (litekeena da posizio laburra edo aurreko datu osatugabeak).",
   "fifo.sell_without_lots.hint":
-    "Aurreko urteak sartu dituzu zure Flex Query-an? Hautatu balio honen lehen erosketatik estaltzen duen epe bat.",
+    "Zure esportazioak aurreko urteak barne hartzen ditu? Deskargatu zure brokerretik balio honen lehen erosketatik hasten den epe bat.",
+  "fifo.cover_without_lots":
+    "⚠ Posizio laburraren itxiera loterik gabe: {{symbol}} ({{isin}}) × {{quantity}} {{date}} egunean. Irabazia ez da kalkulatu (posizio laburra epetik kanpo irekia edo aurreko datu osatugabeak).",
+  "fifo.cover_without_lots.hint":
+    "Aurreko urteak sartu dituzu zure Flex Query-an? Hautatu posizio labur hau ireki zuen salmentatik estaltzen duen epe bat.",
   "fifo.insufficient_lots":
-    "⚠ Lote nahikorik ez: {{symbol}} ({{isin}}) × {{quantity}} {{date}} egunean. Kostu-oinarria = 0.",
+    "⚠ Lote nahikorik ez: {{symbol}}{{isinSuffix}} × {{quantity}} {{date}} egunean. Kostu-oinarria = 0.",
   "fifo.insufficient_lots.hint":
-    "Flex Query-ak ez ditu balio honen aurreko erosketa guztiak estaltzen. Zabaldu kontsulta-epea.",
+    "Fitxategiak ez ditu balio honen aurreko erosketa guztiak estaltzen. Esportatu epe luzeago bat zure brokerretik.",
   "fifo.option_invalid_date": "⚠ OptionEAE gertaera data baliodunik gabe {{symbol}} baliorako. Baztertua.",
   "fifo.option_invalid_date.hint":
     "Aukera-gertaera baztertua data baliogabeagatik. Egiaztatu Flex Query-ak 'Option Exercises, Assignments & Expirations' atala duela.",
@@ -667,6 +792,10 @@ const eu: TranslationKeys = {
     "{{count}} kriptomonetako diru-sarrera daude (adib. staking sariak) automatikoki baloratu ezin izan direnak eta kalkulatutako zenbatekoetan sartzen ez direnak.",
   "report.crypto_income_unvalued.hint":
     "Diru-sarrera hauek kripto berean ordaintzen dira eta ez dute BCEren kanbio-tasa ofizialik. Kalkulatu eurotako balioa kobratze-datan eta deklaratu eskuz kapital higigarriaren etekin gisa (0027 kasila).",
+  "report.dividend_unvalued":
+    "{{currencies}} dibisako {{count}} dibidendu daude automatikoki baloratu ezin izan direnak eta kalkulatutako zenbatekoetan sartzen ez direnak.",
+  "report.dividend_unvalued.hint":
+    "BCEk ez du dibisa horren kanbio-tasa ofizialik argitaratzen kobratze-datan. Kalkulatu zenbatekoa eurotan data horretan, gehitu eskuz 0029 laukian eta kontuan hartu haren atxikipena nazioarteko zergapetze bikoitzaren kenkarian (0588 laukia).",
   "report.crypto_general_gain_unvalued":
     "{{count}} kriptomonetako ondare-irabazi daude (adib. airdropak edo gomendio-komisioak) automatikoki baloratu ezin izan direnak eta kalkulatutako zenbatekoetan sartzen ez direnak.",
   "report.crypto_general_gain_unvalued.hint":
@@ -691,21 +820,76 @@ const eu: TranslationKeys = {
     "Ezin izan dira Flatex-en komisio guztiak parekatu: dagozkien kutxa-idazpenak falta dira.",
   "flatex.commission.unmatched_trades.hint":
     "Igo ezazu Kontoumsätze (kontu-mugimenduak) CSVa ere Depotumsätze-rekin batera, eragiketa bakoitzaren komisioa kontuan har dadin (erosketetan eskuratze-kostuari gehituz eta salmentetan transmisio-baliotik kenduz).",
+  "flatex.commission.cross_currency":
+    "Komisio kalkulaturik gabeko Flatex eragiketak: {{trades}}. Kutxa-idazpena eragiketarena ez den beste txanpon batean dago.",
+  "flatex.commission.cross_currency.hint":
+    "Eragiketa horien komisioa 0an utzi da. Kontsultatu haren zenbatekoa Flatex-eko aginduaren likidazioan eta kontuan hartu aitorpena berrikustean: erosketetan eskuratze-balioari gehitzen zaio eta salmentetan transmisio-baliotik kentzen da.",
+  "flatex.commission.multi_fill_prorated":
+    "Hainbat zatitan exekutatutako Flatex aginduak: {{orders}}. Haien komisioa exekuzioen artean banatu da, bakoitzaren zenbatekoaren arabera.",
+  "flatex.commission.multi_fill_prorated.hint":
+    "Flatex-ek agindu horiek exekuzio kopuruaren desberdina den kutxa-idazpen kopuru batekin likidatu zituen, beraz ezin da jakin zein komisio dagokion bakoitzari. Agindu bakoitzaren komisioen guztizkoa zehatza da; exekuzioen arteko banaketa soilik da gutxi gorabeherakoa.",
+  "flatex.depot.repeated_fills":
+    "Errepikatutako Flatex eragiketak, behin bakarrik zenbatuak: {{fills}}. Kargatuta zegoen beste baten agindu-zenbaki eta idazpen-zenbaki (TA-Nr.) bera zuten.",
+  "flatex.depot.repeated_fills.hint":
+    "Depotumsätze CSV bera bi aldiz igotzean gertatu ohi da, edo datak gainjartzen dituzten bi esportazio igotzean. Benetan eragiketa desberdinak badira, berrikusi fitxategia: Flatex-ek exekuzio bakoitzari bere TA-Nr. ematen dio.",
+  "flatex.dividends.net_amounts":
+    "Flatex-ek dibidenduak jasotako zenbateko garbiarekin erregistratzen ditu, atxikipena kenduta, eta Kontoumsätze CSVak ez du atxikipena jasotzen.",
+  "flatex.dividends.net_amounts.hint":
+    "Hartu kobrantza bakoitzaren zenbateko osoa eta atxikipena Flatex-ek zure dokumentu-postontzian uzten duen PDF egiaztagiritik, eta zuzendu eskuz 0029 laukia (zenbateko osoa), 0588 laukia (atzerriko atxikipena) eta 0597 laukia (atxikipen espainiarra).",
   "degiro.rows_skipped": "{{count}} errenkada baztertu dira ISINik/zenbatekorik gabe.",
   "degiro.rows_skipped.hint":
     "Errenkada hauek kopurua edo prezioa zuten baina ISINa edo zenbatekoa falta zuten, eta, beraz, ezin izan dira eragiketa gisa sartu. Normalean CSVaren zutabeak ondo ez direla ezagutu adierazten du: esportatu berriro Degiro-ren Transakzioen CSVa goiburuak aldatu gabe.",
+  "degiro.corporate_action_pair":
+    "Baliteke {{date}} egunean eragiketa korporatibo bat egotea: {{oldProduct}} ({{oldIsin}}) → {{newProduct}} ({{newIsin}}). Degirok salmenta eta erosketa gisa erregistratzen du.",
+  "degiro.corporate_action_pair.hint":
+    "Degirok ISIN aldaketak, splitak eta akzio-trukeak balore zaharraren salmenta eta berriaren erosketa gisa erregistratzen ditu, agindu-zenbakirik eta kosturik gabe. DeclaRentak horrela kalkulatzen ditu: egun horretan irabazi edo galera bat aitortzen du, eta akzio berriek prezio hori eta data hori hartzen dituzte kostu gisa. Berrikusi Degiroren edo jaulkitzailearen jakinarazpena. ISIN aldaketa hutsa, split bat edo fiskalki neutroa den truke bat izan bazen (Sozietateen gaineko Zergaren Legearen araubide berezia), ez zen salmentarik egon: akzio berriek zaharren kostua eta erosketa-data gordetzen dituzte, beraz, zuzendu eragiketa hori zure aitorpenean. Zergapean dagoen truke bat izan bazen (LIRPFren 37.1.e art.), kalkulua zuzena da.",
+  "degiro.transaction_tax": "Finantza-transakzioen gaineko zerga ordaindua {{product}} baloreagatik ({{isin}}): {{amount}} {{currency}}.",
+  "degiro.transaction_tax.hint":
+    "Degirok zerga hau kobratzen du Espainiako, Frantziako edo Italiako akzioak erostean, eta Kontuaren CSVan bakarrik erakusten du. Eskuratze-balioaren parte da (PFEZL 35.1.b art.): gehitu balore horren erosketen kostuari, DeclaRentak ez baitu automatikoki gehitzen.",
   "binance.unparseable_timestamp":
     "Binance-ren CSVaren {{count}} errenkada baztertu dira data/ordu (UTC_Time) ezezagun bat izateagatik.",
   "binance.unparseable_timestamp.hint":
     "Normalean eskuz aldatutako edo modu osatugabean esportatutako fitxategi bati zor zaio. Deskargatu berriro jatorrizko txostena Binance-tik editatu gabe eragiketa horiek sar daitezen.",
+  "binance.unhandled_operation":
+    "Binance-ren CSVko {{count}} mugimendu baztertu dira, eragiketa ezezagunak dituztelako: {{operations}}.",
+  "binance.unhandled_operation.hint":
+    "Mugimendu horiek ez dira kalkuluan sartu. Erosketak, salmentak edo diru-sarrerak badira (adib. futuroak, Binance Card bidezko ordainketak, Auto-Invest edo cashback), gehitu eskuz zure aitorpenean eta jakinarazi eragiketaren izena, sar dadin.",
+  "binance.unsupported_pair":
+    "Binance-ren CSVko {{count}} eragiketa baztertu dira, pare ezezagun bat dutelako: {{pairs}}.",
+  "binance.unsupported_pair.hint":
+    "Eragiketa horiek ez dira kalkuluan sartu. Gehitu eskuz zure aitorpenean eta jakinarazi parea, sar dadin.",
+  "etoro.closed_types_skipped":
+    "eToro-ren {{count}} posizio itxi baztertu dira, onartzen ez den mota batekoak direlako: {{types}}.",
+  "etoro.closed_types_skipped.hint":
+    "DeclaRentak oraindik ez ditu eToro-ren posizio mota horiek inportatzen (adib. kriptomonetak). Haien irabazia edo galera ez dago kalkuluan sartuta: gehitu eskuz zure aitorpenean, eToro-k erakusten dituen inbertitutako zenbatekoarekin eta irabaziarekin.",
+  "lightyear.unknown_types":
+    "Lightyear-en CSVko {{count}} errenkada baztertu dira, mugimendu mota ezezaguna dutelako: {{types}}.",
+  "lightyear.unknown_types.hint":
+    "Mugimendu horiek ez dira kalkuluan sartu. Akzio-zatiketak (splits), akzio-transferentziak edo beste eragiketa korporatibo batzuk badira, berrikusi eskuz: geroko salmenten akzio kopurua edo eskuratze-kostua alda dezakete.",
   "coinbase.rewards_income_classification":
     'Coinbase-ren "Rewards Income" motako {{count}} diru-sarrera kapital higigarriaren etekin gisa sailkatu dira (aurrezki-oinarria).',
   "coinbase.rewards_income_classification.hint":
     "Zenbateko horietako batzuk sari promozionalak edo txartelaren cashback-a badira (ez kripto mantentzeagatiko edo lagatzeagatiko etekinak), tratamendu zuzena transmisiotik ez datorren ondare-irabazia litzateke (oinarri orokorra). Berrikusi haien izaera kopurua esanguratsua bada.",
+  "coinbase.unknown_types_skipped":
+    "Coinbase-ren {{count}} errenkada baztertu d(ir)a, eragiketa-mota ezezaguna dutelako: {{types}}.",
+  "coinbase.unknown_types_skipped.hint":
+    "Errenkada horiek ez dira kalkuluan kontuan hartu. Horietako bat salmenta, erosketa, kriptoz egindako ordainketa edo sari bat bada, gehitu eskuz, haren irabazia, eskuratze-kostua edo etekina kontuan har daitezen.",
+  "coinbase.advanced_trade_quote_leg_missing":
+    "Coinbase-ren Advanced Trade-ko {{count}} eragiketa balorazio-monetaz bestelako moneta batean ordaindu edo kobratu d(ir)a ({{pairs}}); erositako edo saldutako kriptomoneta soilik erregistratu da, ez kontrapartidako moneta.",
+  "coinbase.advanced_trade_quote_leg_missing.hint":
+    "Bikote horietan kotizazio-moneta ere eskualdatzen duzu (erostean) edo eskuratzen duzu (saltzean), beste kriptomoneta bat edo dibisa bat izan, eta eragiketa horrek ere tributatzen du. Gehitu eskuz moneta horren salmenta edo erosketa, eragiketaren euro-balio berberarekin, haren irabazia eta eskuratze-kostua bat etor daitezen.",
   "trade_republic.trade_skipped_no_amount":
     "Trade Republic-en erosketa-salmentako {{count}} eragiketa baztertu d(ir)a zenbateko erabilgarririk gabe.",
   "trade_republic.trade_skipped_no_amount.hint":
     'Normalean esportazioan errenkada osatugabeei zor zaie ("amount" zutabea hutsik edo zenbakizkoa ez dena). Eragiketak falta badira, deskargatu berriro transakzioen CSV osoa Trade Republic-etik.',
+  "trade_republic.corporate_action_not_applied":
+    "Trade Republic: ez dira aplikatu {{isins}} baloreen ekintza korporatiboko {{count}} mugimendu (fusioa, trukea, split-a).",
+  "trade_republic.corporate_action_not_applied.hint":
+    "Titulu zaharren kostua ez da berrietara pasatzen, beraz balore berriaren ondorengo salmenta batek loterik gabe eta 0 kostuarekin atera daiteke. Fusioa edo trukea izan bazen, gehitu jatorrizko eskuratze-kostua «Eskuzko loteak transferitutako posizioentzat» atalean.",
+  "trade_republic.delivery_not_applied":
+    "Trade Republic: ez dira inportatu {{isins}} baloreen salerosketarik gabeko {{count}} titulu-entrega (doako akzioak, lekualdaketak).",
+  "trade_republic.delivery_not_applied.hint":
+    "Promozio bateko doako akzioak zerga-oinarri orokorreko ondare-irabazia dira, entrega-eguneko merkatu-balioaren arabera: aitortu itzazu bereiz eta gehitu balio hori kostu gisa «Eskuzko loteak transferitutako posizioentzat» atalean. Beste broker batetik egindako lekualdaketa bada, gehitu bertan jatorrizko erosketa-kostua.",
   "parser.trading212.unresolved_price_skipped":
     "{{skipped}} eragiketa baztertu dira akzioko preziorik gabe eta zenbatekoa beste dibisa batean dutela.",
   "parser.trading212.unresolved_price_skipped.hint":
@@ -719,6 +903,10 @@ const eu: TranslationKeys = {
   "parser.order_level_duplicates": "{{skipped}} ORDER motako errenkada agregatu bikoiztu baztertu dira eragiketetan.",
   "parser.order_level_duplicates.hint":
     'Zure Flex Query-ak "Orders" xehetasun-maila aktibatuta du "Executions"-ez gain Trades atalean, eta horrek eragiketa bakoitza bikoizten du. "Orders" desaktiba dezakezu Flex Query-aren konfigurazioan, baina ez da beharrezkoa: errenkada hauek automatikoki ezikusi dira kopuruak, zenbatekoak eta komisioak ez bikoizteko.',
+  "parser.cancelled_trades": "IBKRk ezeztatutako {{count}} eragiketa baztertu dira, beren ezeztapenarekin batera.",
+  "parser.cancelled_trades.hint": 'IBKRk ezeztatutako egikaritze bat ezeztapen-errenkada batekin markatzen du ("(Ca.)"). Jatorrizko eragiketa eta haren ezeztapena baztertu dira: ez ziren inoiz benetako erosketa edo salmenta izan.',
+  "parser.cancelled_trades_unmatched": "IBKRren {{count}} ezeztapen baztertu dira, jatorrizko eragiketa fitxategi honetan ez dagoelako.",
+  "parser.cancelled_trades_unmatched.hint": "Ezeztatutako eragiketa Flex Query honen alditik kanpo dago. Beste fitxategi batetik kargatzen baduzu, benetakotzat hartzen jarraituko du: esportatu eragiketa eta haren ezeztapena fitxategi berean biltzen dituen aldi bat.",
 };
 
 export default eu;

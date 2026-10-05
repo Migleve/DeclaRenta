@@ -26,7 +26,7 @@ import { calculateDividends } from "../engine/dividends.js";
 import { collapseCorrections } from "../engine/cash-corrections.js";
 import { calculateDoubleTaxation } from "../engine/double-taxation.js";
 import { isEcbResolvable, lookupRateInMap } from "../engine/ecb.js";
-import { resolveCryptoTradeValues } from "../engine/crypto-valuation.js";
+import { resolveCryptoTradeValues, lookupValuationRate, isFiatPriced } from "../engine/crypto-valuation.js";
 import { buildManualRateMap } from "../engine/manual-rates.js";
 import { buildManualOpeningLotTrades, normalizeManualOpeningLot } from "../engine/manual-opening-lots.js";
 import { normalizeDate } from "../engine/dates.js";
@@ -158,11 +158,29 @@ function mergeManualRateHints(
 }
 
 /**
+ * Non-throwing EUR-per-unit rate for cash income (interest, rewards, dividends).
+ * EUR, ECB fiat and stablecoins: the resolved map (weekend walk-back), then the
+ * manual-rate map. Any other coin: the manual-rate map, then a synthetic rate,
+ * both for the exact date. Null when nothing values it.
+ */
+function lookupIncomeRate(
+  date: string,
+  currency: string,
+  resolvedRateMap: EcbRateMap,
+  manualRates: EcbRateMap | undefined,
+): Decimal | null {
+  const mapRate = lookupValuationRate(resolvedRateMap, date, currency);
+  const manualRate = manualRates ? lookupValuationRate(manualRates, date, currency) : null;
+  return isFiatPriced(currency) ? (mapRate ?? manualRate) : (manualRate ?? mapRate);
+}
+
+/**
  * Value a cash income transaction in EUR. Precedence:
  *   1. An explicit `rewardCostBasisEur` (authoritative — already the EUR value,
  *      e.g. from a Binance EUR_Value column). Returns rate as amountEur/|amount|.
- *   2. A rate from the resolved (ECB + synthetic) map, then the manual-rate map,
- *      for the income currency on the receipt date.
+ *   2. For EUR, ECB fiat and stablecoins: the resolved map (weekend walk-back), then the
+ *      manual-rate map. For any other coin: the manual-rate map, then a synthetic
+ *      rate, both for the exact receipt date.
  * Returns null when the income cannot be valued (caller skips + warns).
  */
 function valueIncomeEur(
@@ -190,20 +208,17 @@ function valueIncomeEur(
   }
 
   // A rate present in the resolved map (ECB fiat, a normalized stablecoin like
-  // USDT→USD, or a synthetic crypto rate injected by the valuation pass). We
-  // gate on lookupRateInMap !== null rather than isEcbResolvable() so that a
-  // resolvable currency whose rate was never fetched (e.g. a USDT reward in a
-  // year with no trades) degrades to the manual/skip path below instead of
-  // throwing inside getEcbRate and crashing the whole report.
-  const mapRate = lookupRateInMap(resolvedRateMap, date, t.currency);
-  if (mapRate !== null) {
-    return { amountEur: amount.mul(mapRate).abs(), rate: mapRate };
-  }
-
-  // A user/EUR_Value manual-rate hint for the coin (never a live price oracle).
-  const manualRate = manualRates ? lookupRateInMap(manualRates, date, t.currency) : null;
-  if (manualRate !== null) {
-    return { amountEur: amount.mul(manualRate).abs(), rate: manualRate };
+  // USDT→USD, or a synthetic crypto rate injected by the valuation pass), or a
+  // user/EUR_Value manual-rate hint for the coin (never a live price oracle).
+  // Lookups return null instead of throwing, so a resolvable currency whose rate
+  // was never fetched (e.g. a USDT reward in a year with no trades) degrades to
+  // the skip path instead of crashing the whole report. For a coin (not ECB
+  // fiat/stablecoin) both lookups match the receipt date exactly and the manual
+  // quote wins, the same order as the valuation pass, so a price inferred on an
+  // earlier day is never reused for this reward.
+  const rate = lookupIncomeRate(date, t.currency, resolvedRateMap, manualRates);
+  if (rate !== null) {
+    return { amountEur: amount.mul(rate).abs(), rate };
   }
 
   return null;
@@ -398,7 +413,6 @@ export function generateTaxReport(
   );
   const manualOpeningLotTrades = buildManualOpeningLotTrades(usableManualOpeningLots);
   const resolvedTrades = [...valuation.trades, ...rewardLots, ...manualOpeningLotTrades];
-  const washSaleTrades = [...statement.trades, ...manualOpeningLotTrades];
 
   // 1. FIFO capital gains (process ALL years, filter to target year).
   //    Monodivisa (skipFx) → traditional cost basis: a FCY security's cost is
@@ -407,6 +421,27 @@ export function generateTaxReport(
   //    same-fiat cost at the sale-date rate (V2422-20), drift to the FX engine.
   const fifoEngine = new FifoEngine({ traditionalCostBasis: options?.skipFx });
   fifoEngine.processTrades(resolvedTrades, resolvedRateMap, statement.corporateActions, statement.optionExercises);
+  // A cash buyout is a sale booked inside FIFO from a TC row; anti-churning must
+  // see it too, or the bought-out shares still count as held (V3282-18 total exit).
+  const washSaleTrades = [...statement.trades, ...manualOpeningLotTrades, ...fifoEngine.getCashBuyoutSales()];
+
+  // Lots still held at 31 December, for the Modelo 720 acquisition dates. When
+  // the upload runs past the year end, the main pass has already consumed lots
+  // with later sales, so replay only the inputs dated up to 31 December.
+  const yearEnd = `${year}-12-31`;
+  const tradesToYearEnd = resolvedTrades.filter((t) => normalizeDate(t.tradeDate) <= yearEnd);
+  const actionsToYearEnd = statement.corporateActions.filter((ca) => normalizeDate(ca.dateTime.slice(0, 8)) <= yearEnd);
+  const exercisesToYearEnd = statement.optionExercises?.filter((ex) => normalizeDate(ex.date) <= yearEnd);
+  let yearEndLots = fifoEngine.getRemainingLots();
+  if (
+    tradesToYearEnd.length < resolvedTrades.length ||
+    actionsToYearEnd.length < statement.corporateActions.length ||
+    (exercisesToYearEnd?.length ?? 0) < (statement.optionExercises?.length ?? 0)
+  ) {
+    const yearEndEngine = new FifoEngine({ traditionalCostBasis: options?.skipFx });
+    yearEndEngine.processTrades(tradesToYearEnd, resolvedRateMap, actionsToYearEnd, exercisesToYearEnd);
+    yearEndLots = yearEndEngine.getRemainingLots();
+  }
 
   // Number of account holders. >1 splits every reported amount equally per
   // contribuyente (Art. 11.3 LIRPF). Sanitized to an integer >= 1.
@@ -422,7 +457,12 @@ export function generateTaxReport(
   // set, so this is identical to before. Then keep only the target year's
   // disposals for the figures (a block/release is attributed to the year of the
   // disposal that carries it).
-  const allDisposals = detectWashSales(fifoEngine.getDisposals(), washSaleTrades, statement.corporateActions);
+  const allDisposals = detectWashSales(
+    fifoEngine.getDisposals(),
+    washSaleTrades,
+    statement.corporateActions,
+    fifoEngine.getSplitRatios(),
+  );
   let disposals = allDisposals.filter((d) => d.sellDate.startsWith(yearStr));
   if (titulares > 1) disposals = disposals.map((d) => splitDisposal(d, titulares));
 
@@ -444,10 +484,25 @@ export function generateTaxReport(
   // withholding — instead of the reversal being .abs()'d into an addition
   // (dividends.ts) that triples the retención. Only exact opposite-sign pairs
   // cancel; a file with no reversals is unchanged.
-  const yearCashTransactions = collapseCorrections(
-    statement.cashTransactions.filter((t) => t.dateTime.startsWith(yearStr)),
-  );
-  let dividendEntries = calculateDividends(yearCashTransactions, rateMap);
+  // A withholding can be booked days away from its dividend, so a late-December
+  // dividend may have its withholding in January (and the other way round).
+  // Match over every cash row in the statement, then keep the dividends paid in
+  // the year. A fixed window around the year would cut some dividends off from
+  // their own withholding and hand it to an in-year dividend of the same ISIN.
+  // collapseCorrections pairs rows by exact date, so running it on every row
+  // leaves the in-year rows unchanged.
+  const allCashTransactions = collapseCorrections(statement.cashTransactions);
+  const yearCashTransactions = allCashTransactions.filter((t) => t.dateTime.startsWith(yearStr));
+  // Dividends are valued like interest: a currency with no ECB or manual rate
+  // (e.g. IBKR's CNH) is skipped with a warning instead of aborting the report.
+  const unvaluedDividendCurrencies = new Map<string, number>();
+  let dividendEntries = calculateDividends(allCashTransactions, resolvedRateMap, {
+    lookupRate: (date, currency) => lookupIncomeRate(date, currency, resolvedRateMap, manualRates),
+    onUnvalued: (div) => {
+      if (!div.dateTime.startsWith(yearStr)) return;
+      unvaluedDividendCurrencies.set(div.currency, (unvaluedDividendCurrencies.get(div.currency) ?? 0) + 1);
+    },
+  }).filter((d) => d.payDate.startsWith(yearStr));
   if (titulares > 1) dividendEntries = dividendEntries.map((d) => splitDividend(d, titulares));
   const grossDividends = dividendEntries.reduce((sum, d) => sum.plus(d.grossAmountEur), new Decimal(0));
 
@@ -662,6 +717,20 @@ export function generateTaxReport(
     allWarnings.push(cryptoMsg);
   }
 
+  if (unvaluedDividendCurrencies.size > 0) {
+    const count = [...unvaluedDividendCurrencies.values()].reduce((a, b) => a + b, 0);
+    const currencies = [...unvaluedDividendCurrencies.keys()].sort().join(", ");
+    const divMsg = `Hay ${count} dividendo(s) en ${currencies} que no se han podido valorar automáticamente y no están incluidos en los importes calculados.`;
+    allMessages.push({
+      id: "report.dividend_unvalued",
+      severity: "warning",
+      message: divMsg,
+      hint: "El BCE no publica un tipo de cambio oficial para esa divisa en la fecha de cobro. Calcula el importe en euros a esa fecha, súmalo a mano a la casilla 0029 y ten en cuenta su retención en la deducción por doble imposición internacional (casilla 0588).",
+      context: { count: String(count), currencies },
+    });
+    allWarnings.push(divMsg);
+  }
+
   if (unresolvableGeneralGains > 0) {
     const ggMsg = `Hay ${unresolvableGeneralGains} ganancia(s) patrimonial(es) en criptomoneda (p. ej. airdrops o comisiones de referidos) que no se han podido valorar automáticamente y no están incluidas en los importes calculados.`;
     allMessages.push({
@@ -758,6 +827,11 @@ export function generateTaxReport(
 
   return {
     year,
+    settings: {
+      monodivisa: options?.skipFx === true,
+      trackAutoConvert: options?.trackAutoConvert !== false,
+      titulares,
+    },
     warnings: allWarnings,
     messages: allMessages,
     unresolvedCryptoValuations: yearUnresolvedCrypto.length > 0 ? yearUnresolvedCrypto : undefined,
@@ -795,5 +869,6 @@ export function generateTaxReport(
       disposals: fxDisposals,
     },
     ...(fxTrace ? { fxTrace } : {}),
+    yearEndLots,
   };
 }

@@ -1,7 +1,8 @@
 name: Deploy to GitHub Pages
 
 on:
-  workflow_run:
+  # Fires only after our own Auto Release on main; it never runs PR code.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: ["Auto Release"]
     types: [completed]
   workflow_dispatch:
@@ -24,6 +25,25 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          # This job builds and uploads an artifact; it never pushes.
+          persist-credentials: false
+
+      # After Auto Release, main may already hold commits merged while that release
+      # was being validated. Build the tag the release cut instead: the oldest
+      # release tag that contains the commit it ran on. If it cut none, rebuild the
+      # newest tag. A manual run builds the branch it was started on.
+      - name: Check out the release tag
+        id: release
+        env:
+          RELEASED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          TAG="$(git tag -l 'v*' --sort=-version:refname | head -1)"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_run" ]; then
+            CUT="$(git tag -l 'v*' --contains "$RELEASED_SHA" --sort=version:refname | head -1)"
+            TAG="${CUT:-$TAG}"
+            git checkout --detach "$TAG"
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -32,10 +52,29 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build web
-        run: npm run build:web
+        env:
+          APP_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          echo "Building declarenta.com as version ${APP_VERSION}"
+          npm run build:web
+
+      # The docs are a directory of the same artifact (declarenta.com/docs/),
+      # so they go live with each release and never need a deploy of their own.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: docs/requirements-docs.txt
+
+      - name: Install docs dependencies
+        run: pip install -r docs/requirements-docs.txt
+
+      - name: Build docs
+        run: mkdocs build --strict --site-dir dist/web/docs
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5

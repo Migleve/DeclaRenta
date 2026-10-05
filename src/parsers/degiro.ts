@@ -25,7 +25,9 @@ import {
   findColumn,
   normalizeFractionalCurrency,
   stripBom,
+  timeOfDay,
 } from "./csv-utils.js";
+import { formatDateDmy } from "../engine/dates.js";
 
 // ---------------------------------------------------------------------------
 // Header detection patterns (multi-language)
@@ -53,8 +55,29 @@ const WITHHOLDING_PATTERNS = [
   /withholding tax/i,
   /dividend.?tax/i,
   /dividendbelasting/i,
+  /dividendensteuer/i,
   /quellensteuer/i,
+  /imp[oô]ts? sur (les )?dividendes?/i,
+  /ritenuta sul dividendo/i,
+  /imposto sobre dividendo/i,
 ];
+
+/**
+ * Financial-transaction-tax description patterns (Account CSV): Spanish ITF,
+ * French TTF, Italian FTT. Degiro lists them only in the Account CSV, never in
+ * the Transactions CSV, so they cannot reach the buy's acquisition cost.
+ */
+const TRANSACTION_TAX_PATTERNS = [
+  /transaction tax/i,
+  /impuesto sobre (las )?transacciones financieras/i,
+  /taxe sur les transactions financi[eè]res/i,
+];
+
+/**
+ * Relative gap allowed between the two legs of a corporate-action pair. Degiro
+ * books both legs at the same value; the margin only absorbs price rounding.
+ */
+const PAIR_VALUE_TOLERANCE = new Decimal("0.01");
 
 // ---------------------------------------------------------------------------
 // Transactions CSV parser
@@ -201,6 +224,12 @@ function parseTransactionsCsv(lines: string[], delimiter: string): Statement {
   // non-trade lines (deposits, cash sweeps: no qty, no price) are NOT counted,
   // nor are documented zero-price rights assignments.
   let tradeLikeRowsSkipped = 0;
+  // Rows with no order ID and no costs. Degiro books an ISIN change, a split
+  // or a share exchange as such a same-day sale of the old ISIN plus a buy of
+  // the new one at the same value. They stay trades (a canje can be taxable
+  // under art. 37.1.e LIRPF) but the user is warned, since a neutral one keeps
+  // the old cost and acquisition date instead.
+  const orderlessRows: { trade: Trade; value: Decimal }[] = [];
 
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i]!.trim();
@@ -210,6 +239,7 @@ function parseTransactionsCsv(lines: string[], delimiter: string): Statement {
 
     const dateStr = fields[cols.date] ?? "";
     const tradeDate = convertDateDMY(dateStr);
+    const tradeTime = cols.time >= 0 ? timeOfDay(fields[cols.time] ?? "") : undefined;
     const quantity = parseNumber(fields[cols.quantity] ?? "0");
     const price = parseNumber(fields[cols.price] ?? "0");
     const currency = cols.priceCurrency >= 0 ? (fields[cols.priceCurrency] ?? "").trim() : "";
@@ -294,7 +324,7 @@ function parseTransactionsCsv(lines: string[], delimiter: string): Statement {
       }
     }
 
-    trades.push({
+    const trade: Trade = {
       tradeID: orderId,
       accountId: "",
       symbol: product,
@@ -303,6 +333,7 @@ function parseTransactionsCsv(lines: string[], delimiter: string): Statement {
       assetCategory: "STK",
       currency: tradeCurrency,
       tradeDate,
+      tradeTime,
       settlementDate: tradeDate, // T+2 estimated, but we use tradeDate for FIFO
       quantity: isSell ? `-${absQtyStr}` : absQtyStr,
       tradePrice,
@@ -318,7 +349,16 @@ function parseTransactionsCsv(lines: string[], delimiter: string): Statement {
       commission: commissionValue,
       taxes: "0",
       multiplier: "1",
-    });
+    };
+    trades.push(trade);
+
+    if (!orderId && commDec.isZero()) {
+      // Compare legs by EUR value (the two ISINs may quote in different units);
+      // fall back to the local value when the EUR column is missing or empty.
+      const eurDec = toFiniteDecimal(eurValue || "0").abs();
+      const pairValue = eurDec.isZero() ? valueDec.abs() : eurDec;
+      if (!pairValue.isZero()) orderlessRows.push({ trade, value: pairValue });
+    }
   }
 
   const parserMessages: TaxMessage[] = [];
@@ -329,6 +369,33 @@ function parseTransactionsCsv(lines: string[], delimiter: string): Statement {
       message: `Se omitieron ${tradeLikeRowsSkipped} filas sin ISIN/sin importe.`,
       hint: "Estas filas tenían cantidad o precio pero les faltaba el ISIN o el importe, por lo que no se pudieron incluir como operaciones. Suele indicar que las columnas del CSV no se han reconocido bien: vuelve a exportar el CSV de Transacciones de Degiro sin modificar las cabeceras.",
       context: { count: String(tradeLikeRowsSkipped) },
+    });
+  }
+
+  const pairedBuys = new Set<Trade>();
+  for (const out of orderlessRows) {
+    if (out.trade.buySell !== "SELL") continue;
+    const inc = orderlessRows.find(
+      (c) =>
+        c.trade.buySell === "BUY" &&
+        !pairedBuys.has(c.trade) &&
+        c.trade.tradeDate === out.trade.tradeDate &&
+        c.trade.isin !== out.trade.isin &&
+        c.value.minus(out.value).abs().lessThanOrEqualTo(out.value.times(PAIR_VALUE_TOLERANCE)),
+    );
+    if (!inc) continue;
+    pairedBuys.add(inc.trade);
+    const date = formatDateDmy(out.trade.tradeDate);
+    const oldProduct = out.trade.description;
+    const oldIsin = out.trade.isin;
+    const newProduct = inc.trade.description;
+    const newIsin = inc.trade.isin;
+    parserMessages.push({
+      id: "degiro.corporate_action_pair",
+      severity: "warning",
+      message: `Posible operación societaria el ${date}: ${oldProduct} (${oldIsin}) → ${newProduct} (${newIsin}). Degiro la anota como una venta y una compra.`,
+      hint: "Degiro anota los cambios de ISIN, los splits y los canjes de acciones como una venta del valor antiguo y una compra del nuevo, sin número de orden ni costes. DeclaRenta los calcula así: declara una ganancia o pérdida ese día, y las acciones nuevas toman ese precio y esa fecha como coste. Revisa la comunicación de Degiro o del emisor. Si fue un simple cambio de ISIN, un split o un canje fiscalmente neutro (régimen especial de la Ley del Impuesto sobre Sociedades), no hubo venta: las acciones nuevas conservan el coste y la fecha de compra de las antiguas, así que corrige esa operación en tu declaración. Si fue un canje que tributa (art. 37.1.e LIRPF), el cálculo es correcto.",
+      context: { date, oldProduct, oldIsin, newProduct, newIsin },
     });
   }
 
@@ -371,25 +438,31 @@ function resolveAccountColumns(headers: string[]): AccountColumns {
   // Degiro Account CSV has two known layouts:
   // Old: ..., Tipo de cambio, [empty], Importe, [empty], Saldo, ...
   //   → "Importe" = amount col, currency at fx+1
-  // New (real export): ..., Tipo, Variación, [empty], Saldo, ...
-  //   → "Variación" col holds CURRENCY in data, amount is at Variación+1
+  // Real export, every language: ..., Tipo/FX, Variación/Change/Mutatie/Änderung, [empty], Saldo, ...
+  //   → the labelled col holds the CURRENCY in data, the amount is in the unnamed col after it
 
   let currency: number;
-  let amount = findColumn(headers, ["Importe", "Amount", "Change", "Mutatie", "Änderung"]);
+  let amount = findColumn(headers, [
+    "Importe",
+    "Amount",
+    "Variación",
+    "Variation",
+    "Change",
+    "Mutatie",
+    "Änderung",
+  ]);
+  const isUnnamed = (idx: number): boolean => (headers[idx] ?? "").trim() === "";
 
-  if (amount >= 0) {
+  if (amount >= 0 && !isUnnamed(amount - 1) && amount + 1 < headers.length && isUnnamed(amount + 1)) {
+    // Real layout: labelled col = currency position, amount = next (unnamed) column
+    currency = amount;
+    amount = amount + 1;
+  } else if (amount >= 0) {
     // Old format: amount found directly, currency is before it
     currency = findColumn(headers, ["Divisa tipo de cambio", "Currency", "Währung", "Valuta"]);
     if (currency < 0 && fx >= 0) currency = fx + 1;
   } else {
-    // New format: "Variación" header = currency position, amount = next column
-    const varCol = findColumn(headers, ["Variación", "Variation"]);
-    if (varCol >= 0) {
-      currency = varCol;
-      amount = varCol + 1;
-    } else {
-      currency = fx >= 0 ? fx + 1 : -1;
-    }
+    currency = fx >= 0 ? fx + 1 : -1;
   }
 
   const orderId = findColumn(headers, ["ID Orden", "Order ID", "Auftrags-ID"]);
@@ -410,6 +483,9 @@ function parseAccountCsv(lines: string[], delimiter: string): Statement {
   }
 
   const cashTransactions: CashTransaction[] = [];
+  // Financial transaction tax paid, summed per ISIN + currency (Art. 35.1.b LIRPF:
+  // a tax inherent to the purchase, part of its acquisition cost).
+  const transactionTax = new Map<string, { product: string; isin: string; currency: string; total: Decimal }>();
 
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i]!.trim();
@@ -444,7 +520,16 @@ function parseAccountCsv(lines: string[], delimiter: string): Statement {
       type = "Dividends";
     }
 
-    if (!type) continue; // Skip non-dividend/withholding rows
+    if (!type) {
+      if (matchesAny(description, TRANSACTION_TAX_PATTERNS)) {
+        const ccy = currency || "EUR";
+        const key = `${isin || product}|${ccy}`;
+        const entry = transactionTax.get(key) ?? { product, isin, currency: ccy, total: new Decimal(0) };
+        entry.total = entry.total.plus(toFiniteDecimal(amount));
+        transactionTax.set(key, entry);
+      }
+      continue; // Skip non-dividend/withholding rows
+    }
 
     cashTransactions.push({
       transactionID: `degiro-${tradeDate}-${isin}-${i}`,
@@ -461,6 +546,21 @@ function parseAccountCsv(lines: string[], delimiter: string): Statement {
     });
   }
 
+  const parserMessages: TaxMessage[] = [];
+  for (const { product, isin, currency, total } of transactionTax.values()) {
+    const paid = total.negated();
+    if (!paid.greaterThan(0)) continue;
+    const amount = paid.toFixed(2);
+    const name = product || isin;
+    parserMessages.push({
+      id: "degiro.transaction_tax",
+      severity: "info",
+      message: `Impuesto sobre transacciones financieras pagado en ${name} (${isin}): ${amount} ${currency}.`,
+      hint: "Degiro cobra este impuesto al comprar acciones españolas, francesas o italianas y solo lo muestra en el CSV de Cuenta. Forma parte del valor de adquisición (art. 35.1.b LIRPF): súmalo al coste de las compras de ese valor, porque DeclaRenta no lo añade automáticamente.",
+      context: { product: name, isin, amount, currency },
+    });
+  }
+
   return {
     accountId: "",
     fromDate: "",
@@ -471,6 +571,7 @@ function parseAccountCsv(lines: string[], delimiter: string): Statement {
     corporateActions: [],
     openPositions: [],
     securitiesInfo: [],
+    parserMessages: parserMessages.length > 0 ? parserMessages : undefined,
   };
 }
 

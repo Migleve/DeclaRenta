@@ -80,6 +80,19 @@ const ISO_COUNTRY_CODES = new Set([
   "VU", "WF", "WS", "XK", "YE", "YT", "ZA", "ZM", "ZW",
 ]);
 
+/** True when `code` is a two-letter country code AEAT accepts in positions 129-130. */
+export function isIsoCountryCode(code: string): boolean {
+  return ISO_COUNTRY_CODES.has(code);
+}
+
+/** Subclaves (103) the BOE lists for each clave (102): C cuentas, V valores, I IIC (a cero), S seguros y rentas, B inmuebles. */
+const SUBCLAVES: Record<string, string> = { C: "12345", V: "123", I: "0", S: "12", B: "12345" };
+
+/** True when `code` is a clave + subclave pair (positions 102-103) the BOE lists. */
+export function isClaveSubclave(code: string): boolean {
+  return code.length === 2 && (SUBCLAVES[code[0]!] ?? "").includes(code[1]!);
+}
+
 /**
  * Validate the ISIN check digit using the Luhn algorithm.
  *
@@ -130,8 +143,11 @@ function isNumeric(s: string): boolean {
  * - Register type is "1" (summary) or "2" (detail)
  * - Model number is "720"
  * - NIF format (8 digits + letter, or letter + 7 digits + letter)
- * - Numeric fields contain only digits
+ * - Numeric fields contain only digits, at the BOE positions of the type-2
+ *   tail (432-500: valoraciones, representación, número de valores, porcentaje)
+ * - Clave and subclave (102-103) are a pair the BOE lists
  * - Country codes are valid ISO 3166-1 alpha-2
+ * - The declaration number (type 1, 108-120) is 13 digits starting with 720
  * - ISIN check digit passes Luhn algorithm
  *
  * @param records - Array of fixed-width record strings
@@ -195,6 +211,14 @@ export function validateModelo720Records(records: string[]): ValidationResult[] 
 
     // For detail records (type "2"), validate additional fields
     if (len >= 1 && record[0] === "2") {
+      // Clave (102) and subclave (103): V 1-3, I 0, C 1-5, S 1-2, B 1-5
+      if (len >= 103) {
+        const code = record.slice(101, 103);
+        if (!isClaveSubclave(code)) {
+          errors.push(`Clave y subclave de bien o derecho inválidas: "${code}"`);
+        }
+      }
+
       // Country code (positions 129-130)
       if (len >= 130) {
         const country = record.slice(128, 130);
@@ -217,29 +241,54 @@ export function validateModelo720Records(records: string[]): ValidationResult[] 
         }
       }
 
-      // Numeric fields validation
-      // Acquisition value (positions 433-447): 15 digits
-      if (len >= 447) {
-        const acqValue = record.slice(432, 447);
-        if (!isNumeric(acqValue)) {
-          errors.push(`Valor de adquisición no numérico: "${acqValue}"`);
+      // Valoración 1: sign (position 432) + importe (positions 433-446, 14 digits)
+      if (len >= 432 && record[431] !== " " && record[431] !== "N") {
+        errors.push(`Signo de valoración 1 inválido: "${record[431]}" (esperado espacio o N)`);
+      }
+      if (len >= 446) {
+        const v1 = record.slice(432, 446);
+        if (!isNumeric(v1)) {
+          errors.push(`Valoración 1 no numérica: "${v1}"`);
         }
       }
 
-      // Valuation value (positions 449-463): 15 digits
-      if (len >= 463) {
-        const valValue = record.slice(448, 463);
-        if (!isNumeric(valValue)) {
-          errors.push(`Valor de valoración no numérico: "${valValue}"`);
+      // Valoración 2: sign (position 447) + importe (positions 448-461, 14 digits)
+      if (len >= 447 && record[446] !== " " && record[446] !== "N") {
+        errors.push(`Signo de valoración 2 inválido: "${record[446]}" (esperado espacio o N)`);
+      }
+      if (len >= 461) {
+        const v2 = record.slice(447, 461);
+        if (!isNumeric(v2)) {
+          errors.push(`Valoración 2 no numérica: "${v2}"`);
         }
       }
 
-      // Quantity (positions 465-476): 12 digits
-      if (len >= 476) {
-        const qty = record.slice(464, 476);
+      // Clave de representación (position 462): A or B for claves V and I
+      if (len >= 462 && (record[101] === "V" || record[101] === "I")) {
+        if (record[461] !== "A" && record[461] !== "B") {
+          errors.push(`Clave de representación de valores inválida: "${record[461]}" (esperado A o B)`);
+        }
+      }
+
+      // Número de valores (positions 463-474): 12 digits
+      if (len >= 474) {
+        const qty = record.slice(462, 474);
         if (!isNumeric(qty)) {
-          errors.push(`Cantidad no numérica: "${qty}"`);
+          errors.push(`Número de valores no numérico: "${qty}"`);
         }
+      }
+
+      // Porcentaje de participación (positions 476-480): 5 digits
+      if (len >= 480) {
+        const pct = record.slice(475, 480);
+        if (!isNumeric(pct)) {
+          errors.push(`Porcentaje de participación no numérico: "${pct}"`);
+        }
+      }
+
+      // Positions 481-500: blank
+      if (len >= 500 && record.slice(480, 500).trim().length > 0) {
+        errors.push(`Las posiciones 481-500 deben estar en blanco: "${record.slice(480, 500)}"`);
       }
 
       // Declaration type (position 423): A, M, or C
@@ -253,6 +302,15 @@ export function validateModelo720Records(records: string[]): ValidationResult[] 
 
     // For summary records (type "1"), validate numeric totals
     if (len >= 1 && record[0] === "1") {
+      // Número identificativo de la declaración (positions 108-120): 13 digits,
+      // the first three being 720 (Orden HAP/72/2013, art. 1).
+      if (len >= 120) {
+        const declarationId = record.slice(107, 120);
+        if (!/^720\d{10}$/.test(declarationId)) {
+          errors.push(`Número identificativo de la declaración inválido: "${declarationId}" (13 dígitos que empiezan por 720)`);
+        }
+      }
+
       // Detail count (positions 136-144): 9 digits
       if (len >= 144) {
         const detailCount = record.slice(135, 144);
@@ -261,19 +319,19 @@ export function validateModelo720Records(records: string[]): ValidationResult[] 
         }
       }
 
-      // Total acquisition (positions 146-162): 17 digits
+      // Suma total de valoración 1 (positions 146-162): 17 digits
       if (len >= 162) {
-        const totalAcq = record.slice(145, 162);
-        if (!isNumeric(totalAcq)) {
-          errors.push(`Total adquisición no numérico: "${totalAcq}"`);
+        const totalV1 = record.slice(145, 162);
+        if (!isNumeric(totalV1)) {
+          errors.push(`Suma de valoración 1 no numérica: "${totalV1}"`);
         }
       }
 
-      // Total valuation (positions 164-180): 17 digits
+      // Suma total de valoración 2 (positions 164-180): 17 digits
       if (len >= 180) {
-        const totalVal = record.slice(163, 180);
-        if (!isNumeric(totalVal)) {
-          errors.push(`Total valoración no numérico: "${totalVal}"`);
+        const totalV2 = record.slice(163, 180);
+        if (!isNumeric(totalV2)) {
+          errors.push(`Suma de valoración 2 no numérica: "${totalV2}"`);
         }
       }
     }

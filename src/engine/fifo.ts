@@ -29,6 +29,9 @@ const KNOWN_CATEGORIES: ReadonlySet<string> = new Set([
   "CMDTY",
 ]);
 
+/** IBKR wording of a buyout paid only in cash: "... FOR USD 54.20 PER SHARE ..." */
+const PURE_CASH_BUYOUT = /\bFOR\s+[A-Z]{3}\s+\d+(?:\.\d+)?\s+PER\s+SHARE\b/i;
+
 /** Lot grouping key: ISIN when available; conid for IBKR instruments without ISIN (survives ticker renames); otherwise asset category + symbol */
 function lotKey(trade: { isin: string; symbol: string; assetCategory: string; conid?: string }): string {
   if (trade.assetCategory === "CRYPTO") return `CRYPTO:${trade.symbol.toUpperCase()}`;
@@ -37,12 +40,67 @@ function lotKey(trade: { isin: string; symbol: string; assetCategory: string; co
   return `${trade.assetCategory}:${trade.symbol}`;
 }
 
+/** " (ISIN)" after a symbol in a message, or nothing when the asset has no ISIN (most crypto). */
+function isinSuffix(isin: string): string {
+  return isin ? ` (${isin})` : "";
+}
+
+/** A stock split (IBKR FS/RS) as an exact ratio: `num` new shares for every `den` old ones. */
+interface Split {
+  /** ISIN whose lots are split (the old ISIN when the split also changes it) */
+  isin: string;
+  /** ISINs of the corporate-action rows; one that differs from `isin` is the new ISIN */
+  isins: Set<string>;
+  newSymbol: string;
+  date: string;
+  num: Decimal;
+  den: Decimal;
+  /**
+   * Shares added (negative for a reverse split) when the broker gives no ratio
+   * (Revolut). The ratio is then sized in applySplit from the lots held under
+   * `isin` at that date, across every merged file.
+   */
+  sharesAdded?: Decimal;
+  /** Corporate-action rows grouped into this split */
+  transactionIDs: string[];
+}
+
+/**
+ * Scale lots by a split ratio. A split is not a disposal (Art. 37.1.a LIRPF): every
+ * lot keeps its full cost, fractional quantities included. A cash-in-lieu sale of a
+ * fraction consumes it like any other sale. Multiply before dividing so 300 shares
+ * under a 1-for-3 split become exactly 100.
+ */
+function scaleLotsForSplit(lots: Lot[], split: Split): void {
+  for (const lot of lots) {
+    lot.quantity = lot.quantity.mul(split.num).div(split.den);
+    lot.pricePerShare = lot.pricePerShare.mul(split.den).div(split.num);
+    // costInFcy stays the same — total cost doesn't change on a split
+  }
+}
+
+/**
+ * Ratio as shown to the user. A split sized from the holding (60 shares for 6)
+ * is reduced to its simplest form (10:1) when that is exact.
+ */
+function splitRatioLabel(split: Split): string {
+  if (split.sharesAdded) {
+    const [n, d] = split.num.div(split.den).toFraction(1000) as [Decimal, Decimal];
+    if (n.mul(split.den).equals(d.mul(split.num))) return `${n.toString()}:${d.toString()}`;
+  }
+  return `${split.num.toString()}:${split.den.toString()}`;
+}
+
 export class FifoEngine {
   /** FIFO queue per security (ISIN or symbol) — long positions */
   private lots: Map<string, Lot[]> = new Map();
   /** FIFO queue per security — short positions (opened via SELL+O) */
   private shortLots: Map<string, Lot[]> = new Map();
   private disposals: FifoDisposal[] = [];
+  /** Synthetic SELLs booked for cash buyouts (TC rows), for callers that also need them as trades */
+  private cashBuyoutSales: Trade[] = [];
+  /** Ratio applied per FS/RS corporate-action transactionID, for wash-sale.ts to use the same units */
+  private splitRatios: Map<string, { num: Decimal; den: Decimal }> = new Map();
   private nextLotId = 1;
   /**
    * Monodivisa (traditional) mode. When true, a foreign-currency security's cost
@@ -83,6 +141,17 @@ export class FifoEngine {
     // Excluded: WAR (warrants — insufficient data), CASH (FX conversions —
     // gain/loss already embedded in securities trades via ECB rate conversion)
     const optionEaeKeys = new Set((optionExercises ?? []).map((ex) => (ex.conid ? `conid:${ex.conid}` : ex.symbol)));
+    // Underlyings delivered by an exercise/assignment event, keyed by date + ISIN and date + symbol
+    const deliveryKeys = new Set(
+      (optionExercises ?? [])
+        .filter((ex) => ex.action !== "Expiration")
+        .flatMap((ex) => {
+          const date = normalizeDate(ex.date);
+          const keys = [`${date}|${ex.underlyingSymbol}`];
+          if (ex.underlyingIsin) keys.push(`${date}|${ex.underlyingIsin}`);
+          return keys;
+        }),
+    );
     const sorted = [...trades]
       .filter((t) => {
         if (!KNOWN_CATEGORIES.has(t.assetCategory)) {
@@ -94,16 +163,38 @@ export class FifoEngine {
             context: { symbol: t.symbol, assetCategory: t.assetCategory },
           });
         }
-        // Skip option BookTrades for exercises/expirations only when a matching OptionEAE exists
-        // (IBKR generates both a BookTrade with notes="Ep"/"Ex" and an OptionEAE event)
-        if (
-          optionEaeKeys.size > 0 &&
-          (t.assetCategory === "OPT" || t.assetCategory === "FOP" || t.assetCategory === "FSFOP")
-        ) {
+        // Anything but BUY/SELL (e.g. an unhandled broker cancel code) would fall
+        // through to consumeLots below and be taxed as a sale: skip it and warn.
+        // Widened to string: the type says BUY | SELL, parsed input may not.
+        const direction: string = t.buySell;
+        if (direction !== "BUY" && direction !== "SELL") {
+          const date = normalizeDate(t.tradeDate);
+          this.emit({
+            id: "fifo.unknown_direction",
+            severity: "warning",
+            message: `⚠ Operación con dirección desconocida ("${direction}"): ${t.symbol} el ${date}. No se ha procesado.`,
+            hint: "Solo se procesan compras (BUY) y ventas (SELL). Revisa esta fila en el archivo del broker y, si es una operación real, corrige su dirección.",
+            context: { symbol: t.symbol, date, buySell: direction },
+          });
+          return false;
+        }
+        // Skip option BookTrades for exercises/assignments/expirations only when a matching OptionEAE exists
+        // (IBKR generates both a BookTrade with notes="Ep"/"Ex"/"A" and an OptionEAE event)
+        const isOption = t.assetCategory === "OPT" || t.assetCategory === "FOP" || t.assetCategory === "FSFOP";
+        if (optionEaeKeys.size > 0 && isOption) {
           const notes = (t.notes || "").split(";");
-          if (notes.includes("Ep") || notes.includes("Ex")) {
+          if (notes.includes("Ep") || notes.includes("Ex") || notes.includes("A")) {
             const tradeKey = t.conid ? `conid:${t.conid}` : t.symbol;
             if (optionEaeKeys.has(tradeKey)) return false;
+          }
+        }
+        // Skip the underlying's delivery BookTrade (notes "Ex"/"A") when the OptionEAE event already
+        // delivers it (processOptionExercise), or the shares would be acquired or disposed twice
+        if (deliveryKeys.size > 0 && !isOption) {
+          const notes = (t.notes || "").split(";");
+          if (notes.includes("Ex") || notes.includes("A")) {
+            const date = normalizeDate(t.tradeDate);
+            if ((t.isin && deliveryKeys.has(`${date}|${t.isin}`)) || deliveryKeys.has(`${date}|${t.symbol}`)) return false;
           }
         }
         return t.assetCategory !== "WAR" && t.assetCategory !== "CASH";
@@ -120,19 +211,73 @@ export class FifoEngine {
         return 0;
       });
 
-    // Parse splits from corporate actions (deduplicate by ISIN+date)
-    const splitMap = new Map<string, { isin: string; date: string; ratio: number }>();
-    for (const ca of (corporateActions ?? []).filter((ca) => ca.type === "FS")) {
+    // Parse splits from corporate actions: IBKR type FS (forward) and RS (reverse).
+    // The ratio stays as two Decimals so 1-for-3 is exact. When a split moves the
+    // position to a new ISIN, IBKR sends one row per ISIN, both described as
+    // "SYM(OLD_ISIN) SPLIT a FOR b (...)": group them by that old ISIN and date.
+    const splitMap = new Map<string, Split>();
+    for (const ca of (corporateActions ?? []).filter((ca) => ca.type === "FS" || ca.type === "RS")) {
       const ratioMatch = ca.description.match(/SPLIT\s+(\d+)\s+FOR\s+(\d+)/i);
-      const ratio = ratioMatch ? parseInt(ratioMatch[1]!) / parseInt(ratioMatch[2]!) : 0;
-      if (ratio <= 0) continue;
-      const date = normalizeDate(ca.dateTime.slice(0, 8));
-      const key = `${ca.isin}:${date}`;
-      if (!splitMap.has(key)) {
-        splitMap.set(key, { isin: ca.isin, date, ratio });
+      let num = new Decimal(1);
+      let den = new Decimal(1);
+      let sharesAdded: Decimal | undefined;
+      if (ratioMatch) {
+        num = new Decimal(ratioMatch[1]!);
+        den = new Decimal(ratioMatch[2]!);
+        if (num.lessThanOrEqualTo(0) || den.lessThanOrEqualTo(0)) continue;
+      } else {
+        // No ratio: a broker without ISINs (Revolut) gives only the shares added.
+        // The ratio depends on the whole holding, which may span several files,
+        // so it is sized at split time from the lots (applySplit).
+        if (ca.isin) continue;
+        let added: Decimal;
+        try {
+          added = new Decimal(ca.quantity);
+        } catch {
+          continue;
+        }
+        if (!added.isFinite() || added.isZero()) continue;
+        sharesAdded = added;
       }
+      const date = normalizeDate(ca.dateTime.slice(0, 8));
+      const fromIsin = ca.description.match(/\(([A-Z]{2}[A-Z0-9]{9}\d)\)\s+SPLIT\s/i)?.[1]?.toUpperCase();
+      // A broker without ISINs (Revolut) keys its lots by symbol, as wash-sale.ts does.
+      const groupIsin = fromIsin ?? (ca.isin || lotKey({ isin: "", symbol: ca.symbol, assetCategory: "STK" }));
+      const key = `${groupIsin}:${date}`;
+      let split = splitMap.get(key);
+      if (!split) {
+        split = {
+          isin: groupIsin, isins: new Set(), newSymbol: ca.symbol, date, num, den,
+          ...(sharesAdded ? { sharesAdded } : {}),
+          transactionIDs: [],
+        };
+        splitMap.set(key, split);
+      } else if (split.sharesAdded && sharesAdded) {
+        split.sharesAdded = split.sharesAdded.plus(sharesAdded);
+      }
+      split.transactionIDs.push(ca.transactionID);
+      split.isins.add(ca.isin);
+      if (ca.isin !== groupIsin) split.newSymbol = ca.symbol;
     }
     const splits = [...splitMap.values()].sort((a, b) => a.date.localeCompare(b.date));
+
+    // Corporate action types the engine does not apply: tell the user once per action.
+    const handledTypes = new Set(["FS", "RS", "TC", "SO", "SD"]);
+    const unhandledSeen = new Set<string>();
+    for (const ca of corporateActions ?? []) {
+      if (handledTypes.has(ca.type)) continue;
+      const date = normalizeDate(ca.dateTime.slice(0, 8));
+      const key = `${ca.type}:${ca.isin || ca.symbol}:${date}`;
+      if (unhandledSeen.has(key)) continue;
+      unhandledSeen.add(key);
+      this.emit({
+        id: "fifo.corporate_action_unhandled",
+        severity: "info",
+        message: `ℹ Acción corporativa ${ca.type} de ${ca.symbol} (${ca.isin}) el ${date}: no se aplica al cálculo FIFO.`,
+        hint: "Si cambió el número de acciones o el ISIN de la posición, revisa el coste de las ventas posteriores de este valor.",
+        context: { type: ca.type, symbol: ca.symbol, isin: ca.isin, date },
+      });
+    }
 
     // Parse mergers (TC = Tender/Change / Acquisition) from corporate actions
     const mergers: {
@@ -141,8 +286,11 @@ export class FifoEngine {
       newIsin: string;
       newSymbol: string;
       newDescription: string;
-      ratio: number;
+      num: Decimal;
+      den: Decimal;
     }[] = [];
+    // Cash buyouts (TC row that removes shares and pays cash) become synthetic SELLs
+    const cashMergers: Trade[] = [];
     for (const ca of (corporateActions ?? []).filter((ca) => ca.type === "TC")) {
       // IBKR description: "TENDER OFFER OLD_SYM(OLD_ISIN) MERGED(Acquisition) FOR RATIO NEW_SYM(NEW_ISIN)"
       // Also handle: "OLD_SYM(OLD_ISIN) MERGED(Acquisition) WITH NEW_SYM(NEW_ISIN) RATIO FOR 1"
@@ -153,15 +301,53 @@ export class FifoEngine {
         const oldIsin = mergeMatch[2]!;
         const newIsin = mergeMatch[6]!;
         const newSymbol = mergeMatch[5]!;
-        const ratioNew = parseFloat(mergeMatch[3]!);
-        const ratioOld = parseFloat(mergeMatch[4] ?? "1");
+        const num = new Decimal(mergeMatch[3]!);
+        const den = new Decimal(mergeMatch[4] ?? "1");
         const date = normalizeDate(ca.dateTime.slice(0, 8));
-        mergers.push({ date, oldIsin, newIsin, newSymbol, newDescription: ca.description, ratio: ratioNew / ratioOld });
+        mergers.push({ date, oldIsin, newIsin, newSymbol, newDescription: ca.description, num, den });
         continue;
       }
       // Simpler format: just transfer all lots from old ISIN to new ISIN
       if (ca.isin && ca.quantity) {
         const qty = new Decimal(ca.quantity);
+        const amount = new Decimal(ca.amount || "0");
+        // Cash buyout ("... MERGED(Acquisition) FOR USD 54.20 PER SHARE ..."): shares
+        // leave (quantity < 0) and cash arrives (amount ≠ 0). That is a transmisión
+        // onerosa (Art. 33.1 / 35 LIRPF), not a tax-neutral canje de valores, so the
+        // lots are consumed like a SELL whose proceeds are the cash received.
+        // Only the pure-cash wording qualifies: a cash-and-stock merger ("... CASH and
+        // STOCK MERGER ... 592 FOR 1000 AND USD 4.24 ...") also has a negative quantity
+        // and a cash amount, but its amount is only the cash leg; booking it as a sale
+        // would invent a loss for the part paid in new shares.
+        if (qty.isNegative() && !amount.isZero() && PURE_CASH_BUYOUT.test(ca.description)) {
+          const tradeDate = ca.dateTime.slice(0, 8);
+          cashMergers.push({
+            tradeID: ca.transactionID,
+            accountId: ca.accountId,
+            symbol: ca.symbol,
+            description: ca.description,
+            isin: ca.isin,
+            assetCategory: "STK",
+            currency: ca.currency,
+            tradeDate,
+            settlementDate: tradeDate,
+            quantity: ca.quantity,
+            tradePrice: amount.abs().dividedBy(qty.abs()).toString(),
+            tradeMoney: amount.abs().toString(),
+            proceeds: amount.abs().toString(),
+            cost: "0",
+            fifoPnlRealized: "0",
+            fxRateToBase: "1",
+            buySell: "SELL",
+            openCloseIndicator: "C",
+            exchange: "",
+            commissionCurrency: ca.currency,
+            commission: "0",
+            taxes: "0",
+            multiplier: "1",
+          });
+          continue;
+        }
         if (!qty.isZero()) {
           const date = normalizeDate(ca.dateTime.slice(0, 8));
           mergers.push({
@@ -170,12 +356,16 @@ export class FifoEngine {
             newIsin: ca.isin, // Same ISIN if no new one detected
             newSymbol: ca.symbol,
             newDescription: ca.description,
-            ratio: 1,
+            num: new Decimal(1),
+            den: new Decimal(1),
           });
         }
       }
     }
     const sortedMergers = mergers.sort((a, b) => a.date.localeCompare(b.date));
+    const sortedCashMergers = cashMergers.sort((a, b) =>
+      normalizeDate(a.tradeDate).localeCompare(normalizeDate(b.tradeDate)),
+    );
 
     // Parse spin-offs (SO) from corporate actions
     const spinOffs: {
@@ -184,8 +374,8 @@ export class FifoEngine {
       newIsin: string;
       newSymbol: string;
       newDescription: string;
-      ratio: number;
-      costFraction: number;
+      num: Decimal;
+      den: Decimal;
     }[] = [];
     for (const ca of (corporateActions ?? []).filter((ca) => ca.type === "SO")) {
       // IBKR: "PARENT_SYM(PARENT_ISIN) SPINOFF RATIO FOR 1 NEW_SYM(NEW_ISIN)"
@@ -196,8 +386,8 @@ export class FifoEngine {
         const parentIsin = soMatch[2]!;
         const newIsin = soMatch[6]!;
         const newSymbol = soMatch[5]!;
-        const ratioNew = parseFloat(soMatch[3]!);
-        const ratioOld = parseFloat(soMatch[4]!);
+        const num = new Decimal(soMatch[3]!);
+        const den = new Decimal(soMatch[4]!);
         const date = normalizeDate(ca.dateTime.slice(0, 8));
         // Cost-basis split fraction for the spin-off entity.
         //
@@ -208,15 +398,15 @@ export class FifoEngine {
         // either the parent or the new entity. With no value data available, the share
         // ratio is the only proxy we can compute without fabricating numbers. If a future
         // data source exposes FMVs, switch this to (spinoffValue / (parentValue + spinoffValue)).
-        const costFraction = ratioNew / (ratioNew + ratioOld);
+        // applySpinOff gives the spin-off num / (num + den) of the cost.
         spinOffs.push({
           date,
           parentIsin,
           newIsin,
           newSymbol,
           newDescription: ca.description,
-          ratio: ratioNew / ratioOld,
-          costFraction,
+          num,
+          den,
         });
       }
     }
@@ -271,6 +461,7 @@ export class FifoEngine {
     let splitIdx = 0;
     let sdIdx = 0;
     let mergerIdx = 0;
+    let cashMergerIdx = 0;
     let spinOffIdx = 0;
     let optionIdx = 0;
 
@@ -290,6 +481,14 @@ export class FifoEngine {
       while (mergerIdx < sortedMergers.length && sortedMergers[mergerIdx]!.date <= tradeDate) {
         this.applyMerger(sortedMergers[mergerIdx]!);
         mergerIdx++;
+      }
+      // Apply any cash buyouts that occur before this trade
+      while (
+        cashMergerIdx < sortedCashMergers.length &&
+        normalizeDate(sortedCashMergers[cashMergerIdx]!.tradeDate) <= tradeDate
+      ) {
+        this.applyCashMerger(sortedCashMergers[cashMergerIdx]!, rateMap);
+        cashMergerIdx++;
       }
       // Apply any spin-offs that occur before this trade
       while (spinOffIdx < sortedSpinOffs.length && sortedSpinOffs[spinOffIdx]!.date <= tradeDate) {
@@ -344,6 +543,10 @@ export class FifoEngine {
       this.applyMerger(sortedMergers[mergerIdx]!);
       mergerIdx++;
     }
+    while (cashMergerIdx < sortedCashMergers.length) {
+      this.applyCashMerger(sortedCashMergers[cashMergerIdx]!, rateMap);
+      cashMergerIdx++;
+    }
     while (spinOffIdx < sortedSpinOffs.length) {
       this.applySpinOff(sortedSpinOffs[spinOffIdx]!);
       spinOffIdx++;
@@ -356,32 +559,79 @@ export class FifoEngine {
     return this.disposals;
   }
 
-  private applySplit(split: { isin: string; date: string; ratio: number }): void {
+  private applySplit(split: Split): void {
+    if (split.sharesAdded && !this.sizeSplitFromLots(split)) return;
+    for (const id of split.transactionIDs) this.splitRatios.set(id, { num: split.num, den: split.den });
+
+    const emitApplied = (isin: string): void => {
+      const direction = split.num.greaterThanOrEqualTo(split.den) ? "forward" : "reverse";
+      const ratio = splitRatioLabel(split);
+      this.emit({
+        id: "fifo.split_applied",
+        severity: "info",
+        message: `⚡ Split ${isin} ${ratio} (${direction}) aplicado (${split.date})`,
+        hint: "Split aplicado a todos los lotes. El coste total se mantiene — solo cambia el número de acciones.",
+        context: { isin, date: split.date, ratio, direction },
+      });
+    };
+
     const lots = this.lots.get(split.isin);
-    if (!lots || lots.length === 0) return;
-
-    const ratio = new Decimal(split.ratio);
-    for (const lot of lots) {
-      // Multiply quantity by ratio, keep total cost the same
-      lot.quantity = lot.quantity.mul(ratio);
-      lot.pricePerShare = lot.pricePerShare.dividedBy(ratio);
-      // costInFcy stays the same — total cost doesn't change on a split
+    if (lots && lots.length > 0) {
+      scaleLotsForSplit(lots, split);
+      if (split.sharesAdded) {
+        // Land exactly on the holding the broker reports, so a ratio like 10:3
+        // leaves no 1e-19 dust that would make a later full sale look short.
+        const held = split.den.plus(split.sharesAdded);
+        const others = lots.slice(0, -1).reduce((sum, lot) => sum.plus(lot.quantity), new Decimal(0));
+        lots[lots.length - 1]!.quantity = held.minus(others);
+      }
+      // ISIN change: the split lots continue under the new ISIN, ahead of any newer lots there
+      const newIsin = [...split.isins].find((isin) => isin && isin !== split.isin);
+      if (newIsin) {
+        for (const lot of lots) {
+          lot.isin = newIsin;
+          lot.symbol = split.newSymbol || lot.symbol;
+        }
+        this.lots.delete(split.isin);
+        this.lots.set(newIsin, [...lots, ...(this.lots.get(newIsin) ?? [])]);
+        emitApplied(`${split.isin} → ${newIsin}`);
+      } else {
+        emitApplied(split.isin);
+      }
+      return;
     }
 
-    // Remove sub-share lots after split (fractional remainders become cash-in-lieu)
-    const remaining = lots.filter((l) => l.quantity.greaterThanOrEqualTo(1));
-    if (remaining.length < lots.length) {
-      this.lots.set(split.isin, remaining);
+    // No lots under the ISIN named in the description: apply to each row's own ISIN
+    for (const isin of split.isins) {
+      const rowLots = this.lots.get(isin);
+      if (!rowLots || rowLots.length === 0) continue;
+      scaleLotsForSplit(rowLots, split);
+      emitApplied(isin);
     }
+  }
 
-    const direction = split.ratio >= 1 ? "forward" : "reverse";
-    this.emit({
-      id: "fifo.split_applied",
-      severity: "info",
-      message: `⚡ Split ${split.isin} ${split.ratio}:1 (${direction}) aplicado (${split.date})`,
-      hint: "Split aplicado a todos los lotes. El coste total se mantiene — solo cambia el número de acciones.",
-      context: { isin: split.isin, date: split.date, ratio: `${split.ratio}:1`, direction },
-    });
+  /**
+   * Size a split given only as shares added: ratio = (held + added) / held, with
+   * `held` the long lots under the split's key right now, from every merged file.
+   * Returns false (and warns) when nothing is held or the result is not positive.
+   */
+  private sizeSplitFromLots(split: Split): boolean {
+    const added = split.sharesAdded!;
+    const held = (this.lots.get(split.isin) ?? []).reduce((sum, lot) => sum.plus(lot.quantity), new Decimal(0));
+    const after = held.plus(added);
+    if (held.lessThanOrEqualTo(0) || after.lessThanOrEqualTo(0)) {
+      this.emit({
+        id: "fifo.split_unresolved",
+        severity: "warning",
+        message: `⚠ Split de ${split.newSymbol} el ${split.date} sin aplicar: no hay acciones anteriores con las que calcular la proporción.`,
+        hint: "Sube también los extractos de años anteriores, desde la apertura de la cuenta. Si no, el número de acciones y el coste de las ventas posteriores de este valor no serán correctos.",
+        context: { symbol: split.newSymbol, date: split.date, quantity: added.toString() },
+      });
+      return false;
+    }
+    split.num = after;
+    split.den = held;
+    return true;
   }
 
   private addScripDividendLot(sd: {
@@ -420,18 +670,17 @@ export class FifoEngine {
     newIsin: string;
     newSymbol: string;
     newDescription: string;
-    ratio: number;
+    num: Decimal;
+    den: Decimal;
   }): void {
     const oldLots = this.lots.get(merger.oldIsin);
     if (!oldLots || oldLots.length === 0) return;
-
-    const ratio = new Decimal(merger.ratio);
 
     // Transfer all lots from old ISIN to new ISIN, adjusting quantity by ratio
     // Total cost basis is preserved (tax-neutral exchange)
     const newLots: Lot[] = [];
     for (const lot of oldLots) {
-      const newQuantity = lot.quantity.mul(ratio);
+      const newQuantity = lot.quantity.mul(merger.num).div(merger.den);
       newLots.push({
         ...lot,
         id: `LOT-${this.nextLotId++}`,
@@ -451,19 +700,35 @@ export class FifoEngine {
     }
     this.lots.get(merger.newIsin)!.push(...newLots);
 
+    const ratio = `${merger.num.toString()}:${merger.den.toString()}`;
     this.emit({
       id: "fifo.merger_applied",
       severity: "info",
-      message: `🔄 Fusión: ${merger.oldIsin} → ${merger.newIsin} (ratio ${merger.ratio}:1, ${oldLots.length} lotes transferidos, ${merger.date})`,
+      message: `🔄 Fusión: ${merger.oldIsin} → ${merger.newIsin} (ratio ${ratio}, ${oldLots.length} lotes transferidos, ${merger.date})`,
       hint: "Fusión fiscal neutra: los lotes se transfieren al nuevo ISIN conservando el coste base original.",
       context: {
         oldIsin: merger.oldIsin,
         newIsin: merger.newIsin,
         date: merger.date,
-        ratio: `${merger.ratio}:1`,
+        ratio,
         lotsTransferred: String(oldLots.length),
       },
     });
+  }
+
+  /** Cash buyout: dispose of the lots through FIFO at the cash received (Art. 33.1 / 35 LIRPF). */
+  private applyCashMerger(sell: Trade, rateMap: EcbRateMap): void {
+    const date = normalizeDate(sell.tradeDate);
+    const quantity = new Decimal(sell.quantity).abs().toString();
+    this.emit({
+      id: "fifo.cash_merger_disposal",
+      severity: "info",
+      message: `💶 Compra en efectivo: ${sell.symbol} (${sell.isin}) × ${quantity} el ${date}. Se declara como una venta.`,
+      hint: "Una fusión o adquisición pagada en efectivo es una transmisión: la ganancia o pérdida se calcula como en una venta, con el efectivo recibido como valor de transmisión.",
+      context: { symbol: sell.symbol, isin: sell.isin, date, quantity },
+    });
+    this.cashBuyoutSales.push(sell);
+    this.consumeLots(sell, rateMap);
   }
 
   private applySpinOff(spinOff: {
@@ -472,24 +737,21 @@ export class FifoEngine {
     newIsin: string;
     newSymbol: string;
     newDescription: string;
-    ratio: number;
-    costFraction: number;
+    num: Decimal;
+    den: Decimal;
   }): void {
     const parentLots = this.lots.get(spinOff.parentIsin);
     if (!parentLots || parentLots.length === 0) return;
 
-    const ratio = new Decimal(spinOff.ratio);
-    const costFraction = new Decimal(spinOff.costFraction);
-    const parentFraction = new Decimal(1).minus(costFraction);
-
     // For each parent lot: split cost basis proportionally and create new lot for spin-off
     const newLots: Lot[] = [];
     for (const lot of parentLots) {
-      const spinOffCost = lot.costInFcy.mul(costFraction);
-      const spinOffQuantity = lot.quantity.mul(ratio);
+      // The spin-off takes num / (num + den) of the cost; multiply before dividing
+      const spinOffCost = lot.costInFcy.mul(spinOff.num).div(spinOff.num.plus(spinOff.den));
+      const spinOffQuantity = lot.quantity.mul(spinOff.num).div(spinOff.den);
 
-      // Reduce parent lot cost basis (in FCY)
-      lot.costInFcy = lot.costInFcy.mul(parentFraction);
+      // Reduce parent lot cost basis (in FCY); parent + spin-off add up to the original cost
+      lot.costInFcy = lot.costInFcy.minus(spinOffCost);
       lot.pricePerShare = lot.costInFcy.dividedBy(lot.quantity);
 
       // Create new lot for spin-off entity
@@ -512,17 +774,19 @@ export class FifoEngine {
     }
     this.lots.get(spinOff.newIsin)!.push(...newLots);
 
+    const ratio = `${spinOff.num.toString()}:${spinOff.den.toString()}`;
+    const costPercent = spinOff.num.mul(100).div(spinOff.num.plus(spinOff.den)).toFixed(0);
     this.emit({
       id: "fifo.spinoff_applied",
       severity: "info",
-      message: `🔀 Spin-off: ${spinOff.parentIsin} → ${spinOff.newIsin} (ratio ${spinOff.ratio}:1, coste ${(spinOff.costFraction * 100).toFixed(0)}% al spin-off, ${spinOff.date})`,
+      message: `🔀 Spin-off: ${spinOff.parentIsin} → ${spinOff.newIsin} (ratio ${ratio}, coste ${costPercent}% al spin-off, ${spinOff.date})`,
       hint: "El coste se reparte proporcionalmente entre la matriz y la empresa escindida.",
       context: {
         parentIsin: spinOff.parentIsin,
         newIsin: spinOff.newIsin,
         date: spinOff.date,
-        ratio: `${spinOff.ratio}:1`,
-        costPercent: (spinOff.costFraction * 100).toFixed(0),
+        ratio,
+        costPercent,
       },
     });
   }
@@ -667,6 +931,7 @@ export class FifoEngine {
       symbol: trade.symbol,
       description: trade.description,
       sellDate: trade.tradeDate,
+      ...(trade.settlementDate ? { settlementDate: trade.settlementDate } : {}),
       acquireDate: parts.acquireDate,
       quantity: parts.quantity,
       gainLossFcy: parts.gainLossFcy,
@@ -693,12 +958,13 @@ export class FifoEngine {
       this.emit({
         id: "fifo.sell_without_lots",
         severity: "error",
-        message: `⚠ Venta sin lotes: ${trade.symbol} (${trade.isin}) × ${remaining} el ${normalizeDate(trade.tradeDate)}. Coste base = 0 (posible posición corta o datos previos incompletos).`,
-        hint: "¿Has incluido los años anteriores en tu Flex Query? Selecciona un periodo que cubra desde la primera compra de este valor.",
+        message: `⚠ Venta sin lotes: ${trade.symbol}${isinSuffix(trade.isin)} × ${remaining} el ${normalizeDate(trade.tradeDate)}. Coste base = 0 (posible posición corta o datos previos incompletos).`,
+        hint: "¿Incluye tu exportación los años anteriores? Descarga de tu broker un periodo que cubra desde la primera compra de este valor.",
         context: {
           symbol: trade.symbol,
           description: trade.description,
           isin: trade.isin,
+          isinSuffix: isinSuffix(trade.isin),
           conid: trade.conid ?? "",
           assetCategory: trade.assetCategory,
           currency: trade.currency,
@@ -801,12 +1067,13 @@ export class FifoEngine {
       this.emit({
         id: "fifo.insufficient_lots",
         severity: "error",
-        message: `⚠ Lotes insuficientes: ${trade.symbol} (${trade.isin}) × ${remaining} el ${normalizeDate(trade.tradeDate)}. Coste base = 0.`,
-        hint: "El Flex Query no cubre todas las compras previas de este valor. Amplía el periodo de consulta.",
+        message: `⚠ Lotes insuficientes: ${trade.symbol}${isinSuffix(trade.isin)} × ${remaining} el ${normalizeDate(trade.tradeDate)}. Coste base = 0.`,
+        hint: "El fichero no cubre todas las compras previas de este valor. Exporta desde tu broker un periodo más amplio.",
         context: {
           symbol: trade.symbol,
           description: trade.description,
           isin: trade.isin,
+          isinSuffix: isinSuffix(trade.isin),
           conid: trade.conid ?? "",
           assetCategory: trade.assetCategory,
           currency: trade.currency,
@@ -881,6 +1148,28 @@ export class FifoEngine {
     const key = lotKey(trade);
     const lots = this.shortLots.get(key);
     if (!lots || lots.length === 0) {
+      if (trade.openCloseIndicator === "C") {
+        // A pure cover with no open short: the short was opened outside the data
+        // (or it is missing). Its gain is unknown, and the cover is not a purchase,
+        // so it must not become a long lot that a later sale would consume.
+        this.emit({
+          id: "fifo.cover_without_lots",
+          severity: "error",
+          message: `⚠ Cierre de corto sin lotes: ${trade.symbol} (${trade.isin}) × ${remaining} el ${normalizeDate(trade.tradeDate)}. Ganancia no calculada (posición corta abierta fuera del periodo o datos previos incompletos).`,
+          hint: "¿Has incluido los años anteriores en tu Flex Query? Selecciona un periodo que cubra desde la venta que abrió esta posición corta.",
+          context: {
+            symbol: trade.symbol,
+            description: trade.description,
+            isin: trade.isin,
+            conid: trade.conid ?? "",
+            assetCategory: trade.assetCategory,
+            currency: trade.currency,
+            date: normalizeDate(trade.tradeDate),
+            quantity: remaining.toString(),
+          },
+        });
+        return;
+      }
       this.addLot(trade, rateMap);
       return;
     }
@@ -907,9 +1196,14 @@ export class FifoEngine {
       const openProceedsFcy = lot.costInFcy.dividedBy(lot.quantity).mul(consumed);
       const gainLossFcy = openProceedsFcy.minus(closeCostFcy);
 
-      const proceedsEur = openProceedsFcy.mul(ecbRate);
+      // Monodivisa (`traditionalCostBasis`): the open sale's proceeds use the
+      // OPEN-date rate (Art. 35.1), keeping the FX drift in this line, as
+      // disposalEur() does for a long position's cost.
+      const proceedsEur = openProceedsFcy.mul(this.traditionalCostBasis ? lot.ecbRate : ecbRate);
       const costBasisEur = closeCostFcy.mul(ecbRate);
-      const gainLossEur = gainLossFcy.mul(ecbRate);
+      const gainLossEur = this.traditionalCostBasis
+        ? proceedsEur.minus(costBasisEur)
+        : gainLossFcy.mul(ecbRate);
 
       const acquireDate = lot.acquireDate;
       const holdingDays = daysBetween(acquireDate, trade.tradeDate);
@@ -1014,11 +1308,9 @@ export class FifoEngine {
     }
   }
 
-  /** Resolve option lot key using same logic as lotKey() to avoid mismatches */
+  /** Resolve option lot key with lotKey() itself, so FOP/FSFOP lots match too */
   private optionLotKey(ex: OptionExercise): string {
-    if (ex.isin) return ex.isin;
-    if (ex.conid) return `OPT:conid:${ex.conid}`;
-    return `OPT:${ex.symbol}`;
+    return lotKey({ isin: ex.isin, symbol: ex.symbol, assetCategory: ex.assetCategory ?? "OPT", conid: ex.conid });
   }
 
   /** Resolve underlying key: find existing lots by symbol when ISIN is unknown */
@@ -1026,7 +1318,7 @@ export class FifoEngine {
     if (ex.underlyingIsin) return ex.underlyingIsin;
     // Scan existing lots for a matching symbol (trades processed first, so ISIN-keyed lots exist)
     for (const [key, lots] of this.lots) {
-      if (lots.length > 0 && lots[0]!.symbol === ex.underlyingSymbol && key !== `OPT:${ex.symbol}`) {
+      if (lots.length > 0 && lots[0]!.symbol === ex.underlyingSymbol && key !== this.optionLotKey(ex)) {
         return key;
       }
     }
@@ -1046,7 +1338,8 @@ export class FifoEngine {
         const consumed = Decimal.min(remaining, lot.quantity);
         const costPerUnitFcy = lot.costInFcy.dividedBy(lot.quantity);
         const costBasisFcy = costPerUnitFcy.mul(consumed);
-        const costBasisEur = costBasisFcy.mul(ecbRate);
+        // Monodivisa: the premium paid converts at the purchase-date rate.
+        const costBasisEur = costBasisFcy.mul(this.traditionalCostBasis ? lot.ecbRate : ecbRate);
 
         this.disposals.push({
           isin: ex.isin,
@@ -1096,7 +1389,8 @@ export class FifoEngine {
         const consumed = Decimal.min(remaining, lot.quantity);
         const proceedsPerUnitFcy = lot.costInFcy.dividedBy(lot.quantity);
         const proceedsFcy = proceedsPerUnitFcy.mul(consumed);
-        const proceedsEur = proceedsFcy.mul(ecbRate);
+        // Monodivisa: the premium received converts at the sale-date rate.
+        const proceedsEur = proceedsFcy.mul(this.traditionalCostBasis ? lot.ecbRate : ecbRate);
 
         this.disposals.push({
           isin: ex.isin,
@@ -1493,6 +1787,16 @@ export class FifoEngine {
 
   getDisposals(): FifoDisposal[] {
     return this.disposals;
+  }
+
+  /** The synthetic SELL trades booked for cash buyouts, so the anti-churning check sees the exit. */
+  getCashBuyoutSales(): Trade[] {
+    return this.cashBuyoutSales;
+  }
+
+  /** Ratio applied per FS/RS transactionID, including splits sized from the lots held */
+  getSplitRatios(): Map<string, { num: Decimal; den: Decimal }> {
+    return this.splitRatios;
   }
 
   getRemainingLots(): Map<string, Lot[]> {

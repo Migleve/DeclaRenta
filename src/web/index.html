@@ -21,7 +21,7 @@
   <meta name="theme-color" content="#3b82f6" />
   <link rel="manifest" href="./manifest.json" />
   <link rel="canonical" href="https://declarenta.com" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' https://data-api.ecb.europa.eu; img-src 'self' data:" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' https://data-api.ecb.europa.eu; img-src 'self' data:; form-action 'none'; base-uri 'none'; object-src 'none'" />
   <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
   <link rel="stylesheet" href="./style.css" />
 </head>
@@ -129,7 +129,7 @@
       <!-- ============================================================ -->
       <section id="section-perfil" class="app-section" hidden>
         <h2 data-i18n="profile.title">Perfil fiscal</h2>
-        <p class="section-description" data-i18n="profile.description">Estos datos se utilizan para generar los ficheros de los modelos 720 y D-6.</p>
+        <p class="section-description" data-i18n="profile.description">Estos datos se utilizan para generar los ficheros de los modelos 720 y D-6. Se guardan solo en este navegador, nunca en un servidor.</p>
         <div id="profile-form-container"></div>
       </section>
 
@@ -247,8 +247,8 @@
 
             <h3 data-i18n="results.operations">Operaciones</h3>
             <div class="table-controls">
-              <input type="text" id="ops-search" data-i18n-placeholder="results.search_placeholder" placeholder="Buscar por ISIN o símbolo..." />
-              <select id="ops-filter">
+              <input type="text" id="ops-search" data-i18n-placeholder="results.search_placeholder" placeholder="Buscar por ISIN o símbolo..." data-i18n-aria="a11y.ops_search" aria-label="Buscar operaciones por ISIN o símbolo" />
+              <select id="ops-filter" data-i18n-aria="a11y.ops_filter" aria-label="Filtrar operaciones por resultado">
                 <option value="all" data-i18n="results.filter_all">Todas</option>
                 <option value="gain" data-i18n="results.filter_gains">Ganancias</option>
                 <option value="loss" data-i18n="results.filter_losses">Pérdidas</option>
@@ -261,7 +261,8 @@
 
             <div class="export-buttons">
               <button id="export-json-btn" data-i18n="results.export_json">Exportar JSON</button>
-              <button id="export-csv-btn" data-i18n="results.export_csv">Exportar CSV</button>
+              <button id="export-csv-btn" data-i18n="results.export_csv" data-i18n-title="results.export_csv_title">Exportar CSV</button>
+              <button id="export-csv-excel-btn" data-i18n="results.export_csv_excel" data-i18n-title="results.export_csv_excel_title">Exportar CSV para Excel (ES)</button>
               <button id="export-pdf-btn" data-i18n="results.export_pdf">Exportar PDF</button>
             </div>
 
@@ -315,7 +316,7 @@
 
       <footer>
         <p>
-          <a href="./docs.html" data-i18n="footer.docs">Documentación</a> ·
+          <a href="https://declarenta.com/docs/" data-i18n="footer.docs">Documentación</a> ·
           <a href="https://github.com/GeiserX/DeclaRenta">GitHub</a> ·
           <strong data-i18n="footer.privacy">Self-hosted · Privacidad total</strong>
         </p>

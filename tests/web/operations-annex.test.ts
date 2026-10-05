@@ -11,7 +11,7 @@
 import { describe, it, expect } from "vitest";
 import Decimal from "decimal.js";
 import { renderOperationsAnnex } from "../../src/web/operations-annex.js";
-import { ASSET_LABELS } from "../../src/web/asset-labels.js";
+import { assetLabel } from "../../src/web/asset-labels.js";
 import type { TaxSummary, FifoDisposal } from "../../src/types/tax.js";
 
 function makeDisposal(overrides: Partial<FifoDisposal> = {}): FifoDisposal {
@@ -74,7 +74,7 @@ describe("renderOperationsAnnex — shared asset labels", () => {
     const html = renderOperationsAnnex(makeSummary([
       makeDisposal({ assetCategory: "CRYPTO", isin: "", symbol: "BTC", description: "Bitcoin" }),
     ]));
-    expect(html).toContain(ASSET_LABELS.CRYPTO);
+    expect(html).toContain(assetLabel("CRYPTO"));
     expect(html).toContain("Criptomonedas");
     // The pre-consolidation chart label must no longer appear as a group name.
     expect(html).not.toContain(">Crypto<");
@@ -82,7 +82,7 @@ describe("renderOperationsAnnex — shared asset labels", () => {
 
   it("labels an STK group with the canonical 'Acciones'", () => {
     const html = renderOperationsAnnex(makeSummary([makeDisposal({ assetCategory: "STK" })]));
-    expect(html).toContain(ASSET_LABELS.STK);
+    expect(html).toContain(assetLabel("STK"));
     // The old annex-only label is gone.
     expect(html).not.toContain("Acciones cotizadas");
   });
@@ -91,7 +91,7 @@ describe("renderOperationsAnnex — shared asset labels", () => {
     const html = renderOperationsAnnex(makeSummary([
       makeDisposal({ assetCategory: "FUND", symbol: "VWCE", description: "Vanguard FTSE All-World" }),
     ]));
-    expect(html).toContain(ASSET_LABELS.FUND);
+    expect(html).toContain(assetLabel("FUND"));
     expect(html).toContain("Fondos / ETFs");
   });
 
@@ -100,5 +100,30 @@ describe("renderOperationsAnnex — shared asset labels", () => {
       makeDisposal({ assetCategory: "WIDGET", isin: "", symbol: "X", description: "X" }),
     ]));
     expect(html).toContain("WIDGET");
+  });
+});
+
+describe("renderOperationsAnnex — anti-churning marker", () => {
+  it("highlights a blocked sale and adds an expandable line with amount and repurchase dates", () => {
+    const html = renderOperationsAnnex(makeSummary([
+      makeDisposal({
+        gainLossEur: new Decimal(-400),
+        proceedsEur: new Decimal(520),
+        costBasisEur: new Decimal(920),
+        washSaleBlocked: true,
+        blockedLossEur: new Decimal(400),
+        washSaleRepurchaseDates: ["2025-10-01"],
+      }),
+    ]));
+    expect(html).toContain('<tr class="wash-sale-blocked">');
+    expect(html).toContain('<tr class="wash-sale-detail"><td colspan="9">');
+    expect(html).toContain("Pérdida bloqueada por recompra: 400,00 EUR");
+    expect(html).toContain("01/10/2025");
+  });
+
+  it("adds no marker to a sale without a blocked loss", () => {
+    const html = renderOperationsAnnex(makeSummary([makeDisposal()]));
+    expect(html).not.toContain("wash-sale-blocked");
+    expect(html).not.toContain("wash-sale-detail");
   });
 });

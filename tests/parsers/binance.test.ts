@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { binanceParser } from "../../src/parsers/binance.js";
+import { normalizeCurrency } from "../../src/engine/ecb.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -70,7 +71,8 @@ describe("binanceParser", () => {
     it("should parse sell orders", () => {
       const result = binanceParser.parse(BINANCE_CSV);
       const sells = result.trades.filter((t) => t.buySell === "SELL");
-      expect(sells).toHaveLength(1);
+      // ETHEUR SELL, plus the USDT given up in the SOLUSDT BUY (a permuta).
+      expect(sells.map((t) => t.symbol)).toEqual(["ETH", "USDT"]);
 
       const sell = sells[0]!;
       expect(sell.symbol).toBe("ETH");
@@ -405,9 +407,10 @@ describe("binanceParser", () => {
 
     it("should parse 2-digit year dates correctly", () => {
       const result = binanceParser.parse(ES_SPOT_CSV);
-      expect(result.trades[0]!.tradeDate).toBe("20251231");
-      expect(result.trades[1]!.tradeDate).toBe("20250315");
-      expect(result.trades[2]!.tradeDate).toBe("20250620");
+      // Each BTC-quoted row emits two legs (a permuta), so check one per row.
+      expect(result.trades.find((t) => t.symbol === "CTK")!.tradeDate).toBe("20251231");
+      expect(result.trades.find((t) => t.symbol === "AAVE")!.tradeDate).toBe("20250315");
+      expect(result.trades.find((t) => t.symbol === "LINK")!.tradeDate).toBe("20250620");
     });
 
     it("should parse Ejecutado column with asset suffix", () => {
@@ -440,7 +443,8 @@ describe("binanceParser", () => {
 
     it("should parse correct trade count", () => {
       const result = binanceParser.parse(ES_SPOT_CSV);
-      expect(result.trades).toHaveLength(3);
+      // 3 BTC-quoted rows × 2 legs (the alt and the BTC paid or received).
+      expect(result.trades).toHaveLength(6);
     });
 
     it("should parse real fixture file", () => {
@@ -450,7 +454,8 @@ describe("binanceParser", () => {
       );
       expect(binanceParser.detect(fixture)).toBe(true);
       const result = binanceParser.parse(fixture);
-      expect(result.trades).toHaveLength(5);
+      // 5 BTC-quoted rows × 2 legs.
+      expect(result.trades).toHaveLength(10);
     });
   });
 
@@ -791,6 +796,44 @@ describe("binanceParser", () => {
     });
   });
 
+  describe("transaction history — unhandled operations are reported, never dropped silently", () => {
+    const TX_HEADER = "User_ID,UTC_Time,Account,Operation,Coin,Change,Remark";
+
+    it("emits one warning naming every unrecognised operation with its row count", () => {
+      const csv = [
+        TX_HEADER,
+        "1,2025-02-01 09:00:00,USDT-Futures,Realized Profit and Loss,USDT,5000,",
+        "1,2025-02-01 10:00:00,USDT-Futures,Funding Fee,USDT,-12.5,",
+        "1,2025-03-01 12:00:00,Spot,Binance Card Spending,BTC,-0.1,",
+        "1,2025-04-01 08:00:00,Spot,Auto-Invest Transaction,BTC,0.01,",
+        "1,2025-04-01 08:00:00,Spot,Auto-Invest Transaction,USDT,-800,",
+        "1,2025-05-01 07:00:00,Spot,Card Cashback,BNB,0.5,",
+      ].join("\n");
+      const result = binanceParser.parse(csv);
+      expect(result.trades).toHaveLength(0);
+      expect(result.cashTransactions).toHaveLength(0);
+      const msgs = (result.parserMessages ?? []).filter((m) => m.id === "binance.unhandled_operation");
+      expect(msgs).toHaveLength(1);
+      const msg = msgs[0]!;
+      expect(msg.severity).toBe("warning");
+      expect(msg.context?.count).toBe("6");
+      const ops = msg.context?.operations ?? "";
+      expect(ops).toContain("realized profit and loss (1)");
+      expect(ops).toContain("funding fee (1)");
+      expect(ops).toContain("binance card spending (1)");
+      expect(ops).toContain("auto-invest transaction (2)");
+      expect(ops).toContain("card cashback (1)");
+      expect(msg.message).toContain("auto-invest transaction (2)");
+    });
+
+    it("emits no such warning for a file whose operations are all handled or skipped", () => {
+      const fixture = readFileSync(new URL("../fixtures/binance-tx-sample.csv", import.meta.url), "utf-8");
+      const result = binanceParser.parse(fixture);
+      expect(result.trades.length).toBeGreaterThan(0);
+      expect((result.parserMessages ?? []).some((m) => m.id === "binance.unhandled_operation")).toBe(false);
+    });
+  });
+
   describe("transaction history — plain SPOT trades (Buy/Sell/Fee, Sell Crypto to Fiat)", () => {
     const TX_HEADER = "User_ID,UTC_Time,Account,Operation,Coin,Change,Remark";
 
@@ -1026,5 +1069,367 @@ describe("binanceParser", () => {
       expect(r.trades.some((t) => t.symbol === "XRP" && t.buySell === "BUY")).toBe(true);
       expect(r.trades.some((t) => t.symbol === "ETH" && t.buySell === "SELL")).toBe(true);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Trade History: a crypto-quoted pair is a permuta (Art. 37.1.h LIRPF)
+// ---------------------------------------------------------------------------
+
+describe("binanceParser — Trade History crypto↔crypto pairs emit both legs", () => {
+  const HEADER = "Date(UTC),Pair,Side,Price,Executed,Amount,Fee";
+
+  it("an ETHBTC BUY disposes of the BTC paid and acquires the ETH received", () => {
+    const csv = [HEADER, "2024-06-03 10:00:00,ETHBTC,BUY,0.05,20ETH,1BTC,0.02ETH"].join("\n");
+    const { trades } = binanceParser.parse(csv);
+    expect(trades).toHaveLength(2);
+
+    const btcSell = trades.find((t) => t.symbol === "BTC")!;
+    expect(btcSell.buySell).toBe("SELL");
+    expect(btcSell.quantity).toBe("-1");
+    expect(btcSell.currency).toBe("ETH");
+    expect(btcSell.proceeds).toBe("20");
+    expect(btcSell.tradeDate).toBe("20240603");
+
+    const ethBuy = trades.find((t) => t.symbol === "ETH")!;
+    expect(ethBuy.buySell).toBe("BUY");
+    expect(ethBuy.quantity).toBe("20");
+    expect(ethBuy.currency).toBe("BTC");
+    expect(ethBuy.cost).toBe("1");
+    // The row's fee stays on the base-coin trade, as before.
+    expect(ethBuy.commission).toBe("-0.02");
+    expect(ethBuy.commissionCurrency).toBe("ETH");
+  });
+
+  it("an ETHBTC SELL disposes of the ETH and gives the received BTC a lot", () => {
+    const csv = [HEADER, "2024-06-03 10:00:00,ETHBTC,SELL,0.05,10ETH,0.5BTC,0.0005BTC"].join("\n");
+    const { trades } = binanceParser.parse(csv);
+    expect(trades).toHaveLength(2);
+
+    const ethSell = trades.find((t) => t.symbol === "ETH")!;
+    expect(ethSell.buySell).toBe("SELL");
+    expect(ethSell.quantity).toBe("-10");
+    expect(ethSell.currency).toBe("BTC");
+    expect(ethSell.proceeds).toBe("0.5");
+    expect(ethSell.commission).toBe("-0.0005");
+    expect(ethSell.commissionCurrency).toBe("BTC");
+
+    const btcBuy = trades.find((t) => t.symbol === "BTC")!;
+    expect(btcBuy.buySell).toBe("BUY");
+    expect(btcBuy.quantity).toBe("0.5");
+    expect(btcBuy.currency).toBe("ETH");
+    expect(btcBuy.cost).toBe("10");
+  });
+
+  it("a fiat-quoted BTCEUR row still emits exactly one trade", () => {
+    const csv = [HEADER, "2024-01-15 10:00:00,BTCEUR,BUY,20000,1BTC,20000EUR,0.001BTC"].join("\n");
+    const { trades } = binanceParser.parse(csv);
+    expect(trades).toHaveLength(1);
+    expect(trades[0]!.symbol).toBe("BTC");
+    expect(trades[0]!.currency).toBe("EUR");
+    expect(trades[0]!.buySell).toBe("BUY");
+  });
+});
+
+describe("binanceParser — Trade History quote assets and unsupported pairs", () => {
+  const HEADER = "Date(UTC),Pair,Side,Price,Executed,Amount,Fee";
+
+  it("splits TUSD and AEUR pairs on the real quote, not on USD/EUR", () => {
+    const csv = [
+      HEADER,
+      "2023-05-01 10:00:00,BTCTUSD,BUY,30000,0.01,300,0",
+      "2024-01-10 10:00:00,ETHAEUR,BUY,2000,1,2000,0",
+    ].join("\n");
+    const { trades } = binanceParser.parse(csv);
+    const btc = trades.find((t) => t.symbol === "BTC")!;
+    expect(btc.currency).toBe("TUSD");
+    expect(btc.buySell).toBe("BUY");
+    const eth = trades.find((t) => t.symbol === "ETH")!;
+    expect(eth.currency).toBe("AEUR");
+    expect(trades.some((t) => t.symbol === "BTCT" || t.symbol === "ETHA")).toBe(false);
+  });
+
+  it("keeps a coin ending in A quoted in EUR (ADAEUR is ADA/EUR, not AD/AEUR)", () => {
+    const csv = [HEADER, "2024-01-10 10:00:00,ADAEUR,BUY,0.5,100,50,0"].join("\n");
+    const { trades } = binanceParser.parse(csv);
+    expect(trades).toHaveLength(1);
+    expect(trades[0]!.symbol).toBe("ADA");
+    expect(trades[0]!.currency).toBe("EUR");
+  });
+
+  it("parses EURI, USD1 and DAI quoted pairs instead of rejecting the file", () => {
+    const csv = [
+      HEADER,
+      "2025-01-15 10:00:00,BTCEURI,BUY,90000,0.01,900,0",
+      "2025-01-16 10:00:00,BTCUSD1,BUY,95000,0.01,950,0",
+      "2025-01-17 10:00:00,BTCDAI,BUY,95000,0.01,950,0",
+    ].join("\n");
+    const { trades } = binanceParser.parse(csv);
+    const quotes = trades.filter((t) => t.symbol === "BTC").map((t) => t.currency);
+    expect(quotes).toEqual(["EURI", "USD1", "DAI"]);
+  });
+
+  it("values AEUR and EURI as euro stablecoins and USD1 as a dollar stablecoin", () => {
+    expect(normalizeCurrency("AEUR")).toBe("EUR");
+    expect(normalizeCurrency("EURI")).toBe("EUR");
+    expect(normalizeCurrency("USD1")).toBe("USD");
+  });
+
+  // Real Binance pairs whose split depends on which base is a coin (checked
+  // against Binance's exchangeInfo). Pinned so a regenerated coin list or a new
+  // quote asset cannot flip one of them silently.
+  it.each([
+    ["ADAEUR", "ADA", "EUR"],
+    ["LUNAEUR", "LUNA", "EUR"],
+    ["THETAEUR", "THETA", "EUR"],
+    ["GALAEUR", "GALA", "EUR"],
+    ["ENAEUR", "ENA", "EUR"],
+    ["USDTUSD", "USDT", "USD"],
+    ["BNBUSD", "BNB", "USD"],
+    ["ARBUSD", "AR", "BUSD"],
+    ["USTBUSD", "UST", "BUSD"],
+    ["XRPRLUSD", "XRP", "RLUSD"],
+  ])("splits %s as %s/%s", (pair, base, quote) => {
+    const csv = [HEADER, `2023-05-01 10:00:00,${pair},BUY,1,10,10,0`].join("\n");
+    const { trades } = binanceParser.parse(csv);
+    const bought = trades.filter((t) => t.buySell === "BUY");
+    expect(bought).toHaveLength(1);
+    expect(bought[0]!.symbol).toBe(base);
+    expect(bought[0]!.currency).toBe(quote);
+  });
+
+  it("keeps the BUSD disposal of ARBUSD (AR bought with BUSD is a permuta, not ARB bought in USD)", () => {
+    const csv = [HEADER, "2023-05-01 10:00:00,ARBUSD,BUY,10,5,50,0"].join("\n");
+    const { trades } = binanceParser.parse(csv);
+    expect(trades.some((t) => t.symbol === "ARB")).toBe(false);
+    const busd = trades.find((t) => t.symbol === "BUSD" && t.buySell === "SELL");
+    expect(busd).toBeDefined();
+    expect(busd!.quantity).toBe("-50");
+  });
+
+  it("skips an unsupported pair with a warning and still parses the other rows", () => {
+    const csv = [
+      HEADER,
+      "2025-01-15 10:30:00,BTCUSDT,BUY,40000,0.01,400,0",
+      "2025-01-16 10:30:00,BTCXYZ,BUY,40000,0.01,400,0",
+      "2025-01-17 10:30:00,ETHEUR,SELL,3000,1,3000,0",
+    ].join("\n");
+    const result = binanceParser.parse(csv);
+    expect(result.trades.some((t) => t.symbol === "BTC" && t.currency === "USDT")).toBe(true);
+    expect(result.trades.some((t) => t.symbol === "ETH" && t.currency === "EUR")).toBe(true);
+    const msg = result.parserMessages?.find((m) => m.id === "binance.unsupported_pair");
+    expect(msg).toBeDefined();
+    expect(msg!.context).toMatchObject({ count: "1", pairs: "BTCXYZ" });
+  });
+});
+
+describe("binanceParser — Transaction History legs that straddle two ±1s windows", () => {
+  const TX_HEADER = "User_ID,UTC_Time,Account,Operation,Coin,Change,Remark";
+
+  it("keeps back-to-back Converts apart when the second one starts in the first one's last second", () => {
+    // USDT→SOL (200) at t/t+1, then USDT→ETH (300) at t+1/t+2.
+    const csv = [
+      TX_HEADER,
+      "1,2025-04-01 12:00:00,Spot,Binance Convert,USDT,-200,",
+      "1,2025-04-01 12:00:01,Spot,Binance Convert,SOL,2,",
+      "1,2025-04-01 12:00:01,Spot,Binance Convert,USDT,-300,",
+      "1,2025-04-01 12:00:02,Spot,Binance Convert,ETH,0.1,",
+    ].join("\n");
+    const { trades } = binanceParser.parse(csv);
+    const sol = trades.find((t) => t.symbol === "SOL" && t.buySell === "BUY")!;
+    expect(sol.currency).toBe("USDT");
+    expect(sol.cost).toBe("200");
+    const eth = trades.find((t) => t.symbol === "ETH" && t.buySell === "BUY");
+    expect(eth).toBeDefined();
+    expect(eth!.quantity).toBe("0.1");
+    expect(eth!.cost).toBe("300");
+    const usdtSold = trades.filter((t) => t.symbol === "USDT" && t.buySell === "SELL").map((t) => t.quantity);
+    expect(usdtSold.sort()).toEqual(["-200", "-300"]);
+  });
+
+  it("still nets a Convert whose given-up coin is split across two rows one second apart", () => {
+    const csv = [
+      TX_HEADER,
+      "1,2025-04-01 12:00:00,Spot,Binance Convert,USDT,-120,",
+      "1,2025-04-01 12:00:01,Spot,Binance Convert,SOL,2,",
+      "1,2025-04-01 12:00:01,Funding,Binance Convert,USDT,-80,",
+    ].join("\n");
+    const { trades } = binanceParser.parse(csv);
+    const sol = trades.filter((t) => t.symbol === "SOL");
+    expect(sol).toHaveLength(1);
+    expect(sol[0]!.cost).toBe("200");
+  });
+
+  it("emits both Strategy sales when the second sale starts in the first one's last second", () => {
+    const csv = [
+      TX_HEADER,
+      "1,2025-04-01 12:00:00,Strategy,Transaction Sold,XRP,-10,",
+      "1,2025-04-01 12:00:01,Strategy,Transaction Revenue,USDT,20,",
+      "1,2025-04-01 12:00:01,Strategy,Transaction Sold,ADA,-50,",
+      "1,2025-04-01 12:00:02,Strategy,Transaction Revenue,USDT,30,",
+    ].join("\n");
+    const result = binanceParser.parse(csv);
+    const xrp = result.trades.find((t) => t.symbol === "XRP" && t.buySell === "SELL")!;
+    expect(xrp.proceeds).toBe("20");
+    const ada = result.trades.find((t) => t.symbol === "ADA" && t.buySell === "SELL");
+    expect(ada).toBeDefined();
+    expect(ada!.quantity).toBe("-50");
+    expect(ada!.proceeds).toBe("30");
+    expect(result.parserMessages ?? []).toHaveLength(0);
+  });
+
+  it("emits every sale in a run of Strategy trades each one second after the last", () => {
+    const csv = [
+      TX_HEADER,
+      "1,2025-04-01 12:00:00,Strategy,Transaction Sold,XRP,-10,",
+      "1,2025-04-01 12:00:01,Strategy,Transaction Revenue,USDT,20,",
+      "1,2025-04-01 12:00:01,Strategy,Transaction Sold,ADA,-50,",
+      "1,2025-04-01 12:00:02,Strategy,Transaction Revenue,USDT,30,",
+      "1,2025-04-01 12:00:02,Strategy,Transaction Sold,DOT,-4,",
+      "1,2025-04-01 12:00:03,Strategy,Transaction Revenue,USDT,40,",
+    ].join("\n");
+    const result = binanceParser.parse(csv);
+    const sells = result.trades
+      .filter((t) => t.buySell === "SELL" && t.symbol !== "USDT")
+      .map((t) => [t.symbol, t.proceeds]);
+    expect(sells).toEqual([["XRP", "20"], ["ADA", "30"], ["DOT", "40"]]);
+    expect(result.parserMessages ?? []).toHaveLength(0);
+  });
+
+  it("warns about a Strategy leg with no counterpart instead of dropping it silently", () => {
+    const csv = [
+      TX_HEADER,
+      "1,2025-04-01 12:00:00,Strategy,Transaction Sold,XRP,-10,",
+      "1,2025-04-01 12:00:00,Strategy,Transaction Sold,ADA,-50,",
+      "1,2025-04-01 12:00:00,Strategy,Transaction Revenue,USDT,20,",
+    ].join("\n");
+    const result = binanceParser.parse(csv);
+    expect(result.trades.filter((t) => t.symbol === "XRP")).toHaveLength(1);
+    const msg = result.parserMessages?.find((m) => m.id === "binance.unhandled_operation");
+    expect(msg).toBeDefined();
+    expect(msg!.context).toMatchObject({ count: "1", operations: "transaction sold (1)" });
+  });
+
+  it("keeps back-to-back Converts apart when each lists its received leg first", () => {
+    // SOL←USDT (200) at t/t+1, then ETH←USDT (300) at t+1/t+2.
+    const csv = [
+      TX_HEADER,
+      "1,2025-04-01 12:00:00,Spot,Binance Convert,SOL,2,",
+      "1,2025-04-01 12:00:01,Spot,Binance Convert,USDT,-200,",
+      "1,2025-04-01 12:00:01,Spot,Binance Convert,ETH,0.1,",
+      "1,2025-04-01 12:00:02,Spot,Binance Convert,USDT,-300,",
+    ].join("\n");
+    const result = binanceParser.parse(csv);
+    const buys = result.trades.filter((t) => t.buySell === "BUY").map((t) => [t.symbol, t.cost, t.currency]);
+    expect(buys).toEqual([["SOL", "200", "USDT"], ["ETH", "300", "USDT"]]);
+    const usdtSold = result.trades.filter((t) => t.symbol === "USDT" && t.buySell === "SELL").map((t) => t.quantity);
+    expect(usdtSold).toEqual(["-200", "-300"]);
+    expect(result.parserMessages ?? []).toHaveLength(0);
+  });
+
+  it("keeps back-to-back Converts of the same coin apart when each lists its received leg first", () => {
+    // SOL←USDT twice: 2 SOL for 200 at t/t+1, then 3 SOL for 300 at t+1/t+2.
+    const csv = [
+      TX_HEADER,
+      "1,2025-04-01 12:00:00,Spot,Binance Convert,SOL,2,",
+      "1,2025-04-01 12:00:01,Spot,Binance Convert,USDT,-200,",
+      "1,2025-04-01 12:00:01,Spot,Binance Convert,SOL,3,",
+      "1,2025-04-01 12:00:02,Spot,Binance Convert,USDT,-300,",
+    ].join("\n");
+    const result = binanceParser.parse(csv);
+    const buys = result.trades.filter((t) => t.buySell === "BUY").map((t) => [t.symbol, t.quantity, t.cost]);
+    expect(buys).toEqual([["SOL", "2", "200"], ["SOL", "3", "300"]]);
+    expect(result.parserMessages ?? []).toHaveLength(0);
+  });
+
+  it("keeps back-to-back Converts apart when the file lists them newest first", () => {
+    const csv = [
+      TX_HEADER,
+      "1,2025-04-01 12:00:02,Spot,Binance Convert,ETH,0.1,",
+      "1,2025-04-01 12:00:01,Spot,Binance Convert,USDT,-300,",
+      "1,2025-04-01 12:00:01,Spot,Binance Convert,SOL,2,",
+      "1,2025-04-01 12:00:00,Spot,Binance Convert,USDT,-200,",
+    ].join("\n");
+    const { trades } = binanceParser.parse(csv);
+    const buys = trades.filter((t) => t.buySell === "BUY").map((t) => [t.symbol, t.cost]);
+    expect(buys).toEqual([["SOL", "200"], ["ETH", "300"]]);
+  });
+
+  it("leaves a next Convert whose own counterpart is one second later untouched", () => {
+    // USDT→SOL and BTC→ETH in one window, then ADA←XRP at t+2/t+3 (received first).
+    const csv = [
+      TX_HEADER,
+      "1,2025-04-01 12:00:00,Spot,Binance Convert,USDT,-200,",
+      "1,2025-04-01 12:00:00,Spot,Binance Convert,SOL,2,",
+      "1,2025-04-01 12:00:01,Spot,Binance Convert,BTC,-0.01,",
+      "1,2025-04-01 12:00:01,Spot,Binance Convert,ETH,0.3,",
+      "1,2025-04-01 12:00:02,Spot,Binance Convert,ADA,1000,",
+      "1,2025-04-01 12:00:03,Spot,Binance Convert,XRP,-400,",
+    ].join("\n");
+    const result = binanceParser.parse(csv);
+    const buys = result.trades.filter((t) => t.buySell === "BUY").map((t) => [t.symbol, t.cost, t.currency]);
+    expect(buys).toEqual([["SOL", "200", "USDT"], ["ETH", "0.01", "BTC"], ["ADA", "400", "XRP"]]);
+    expect(result.trades.some((t) => t.symbol === "XRP" && t.buySell === "SELL")).toBe(true);
+    expect(result.parserMessages ?? []).toHaveLength(0);
+  });
+
+  it("still nets a split given-up leg when the next Convert's counterpart is one second later", () => {
+    const csv = [
+      TX_HEADER,
+      "1,2025-04-01 12:00:00,Spot,Binance Convert,USDT,-120,",
+      "1,2025-04-01 12:00:00,Spot,Binance Convert,SOL,2,",
+      "1,2025-04-01 12:00:01,Funding,Binance Convert,USDT,-80,",
+      "1,2025-04-01 12:00:02,Spot,Binance Convert,ADA,1000,",
+      "1,2025-04-01 12:00:03,Spot,Binance Convert,XRP,-400,",
+    ].join("\n");
+    const result = binanceParser.parse(csv);
+    const buys = result.trades.filter((t) => t.buySell === "BUY").map((t) => [t.symbol, t.cost, t.currency]);
+    expect(buys).toEqual([["SOL", "200", "USDT"], ["ADA", "400", "XRP"]]);
+    expect(result.parserMessages ?? []).toHaveLength(0);
+  });
+
+  it("warns about a Convert leg with no counterpart instead of dropping it silently", () => {
+    const csv = [
+      TX_HEADER,
+      "1,2025-04-01 12:00:00,Spot,Binance Convert,USDT,-200,",
+      "1,2025-04-01 12:00:00,Spot,Binance Convert,SOL,2,",
+      "1,2025-04-01 12:00:00,Spot,Binance Convert,ETH,0.1,",
+    ].join("\n");
+    const result = binanceParser.parse(csv);
+    expect(result.trades.filter((t) => t.buySell === "BUY")).toHaveLength(1);
+    const msg = result.parserMessages?.find((m) => m.id === "binance.unhandled_operation");
+    expect(msg).toBeDefined();
+    expect(msg!.context).toMatchObject({ count: "1", operations: "binance convert (1)" });
+  });
+
+  it("keeps back-to-back fiat purchases apart when each lists its crypto leg first", () => {
+    const csv = [
+      TX_HEADER,
+      "1,2025-04-01 12:00:00,Spot,Buy Crypto With Fiat,BTC,0.001,Via CashBalance - Wallet/1",
+      "1,2025-04-01 12:00:01,Spot,Buy Crypto With Fiat,EUR,-100,Via CashBalance - Wallet/1",
+      "1,2025-04-01 12:00:01,Spot,Buy Crypto With Fiat,ETH,0.02,Via CashBalance - Wallet/2",
+      "1,2025-04-01 12:00:02,Spot,Buy Crypto With Fiat,EUR,-50,Via CashBalance - Wallet/2",
+    ].join("\n");
+    const result = binanceParser.parse(csv);
+    const buys = result.trades.map((t) => [t.symbol, t.cost, t.currency]);
+    expect(buys).toEqual([["BTC", "100", "EUR"], ["ETH", "50", "EUR"]]);
+    expect(result.parserMessages ?? []).toHaveLength(0);
+  });
+
+  it("keeps back-to-back fiat purchases apart when the second one starts in the first one's last second", () => {
+    const csv = [
+      TX_HEADER,
+      "1,2025-04-01 12:00:00,Spot,Buy Crypto With Fiat,EUR,-100,Via CashBalance - Wallet/1",
+      "1,2025-04-01 12:00:01,Spot,Buy Crypto With Fiat,BTC,0.001,Via CashBalance - Wallet/1",
+      "1,2025-04-01 12:00:01,Spot,Buy Crypto With Fiat,EUR,-50,Via CashBalance - Wallet/2",
+      "1,2025-04-01 12:00:02,Spot,Buy Crypto With Fiat,ETH,0.02,Via CashBalance - Wallet/2",
+    ].join("\n");
+    const { trades } = binanceParser.parse(csv);
+    const btc = trades.find((t) => t.symbol === "BTC")!;
+    expect(btc.cost).toBe("100");
+    const eth = trades.find((t) => t.symbol === "ETH");
+    expect(eth).toBeDefined();
+    expect(eth!.cost).toBe("50");
+    expect(eth!.currency).toBe("EUR");
   });
 });

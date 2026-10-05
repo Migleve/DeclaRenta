@@ -5,16 +5,18 @@
  * copy-to-clipboard, and generates the D-6 report file.
  */
 
-import { t } from "../i18n/index.js";
+import { getCurrentLocale, t } from "../i18n/index.js";
 import { getProfile, isProfileComplete } from "./profile.js";
-import { lookupPositionRate } from "../engine/ecb.js";
+import { hasNoMarketValue, lookupPositionRate } from "../engine/ecb.js";
 import type { Statement } from "../types/broker.js";
 import type { OpenPosition } from "../types/ibkr.js";
 import type { EcbRateMap } from "../types/ecb.js";
 import Decimal from "decimal.js";
-import { fmtEur } from "./format.js";
+import { fmtEur, fmtQty } from "./format.js";
 import { esc } from "./esc.js";
 import { copyToClipboard } from "./clipboard.js";
+import { renderPositionsDateBanner } from "./positions-date.js";
+import { formatBrokerList } from "./missing-holdings.js";
 
 /** Return year-end date or today if the year hasn't ended yet */
 function effectiveYearEnd(year: number): string {
@@ -23,11 +25,26 @@ function effectiveYearEnd(year: number): string {
   return yearEnd <= today ? yearEnd : today;
 }
 
+/**
+ * Year-end rate for a position, or null when it cannot be valued: no rate for
+ * its currency, or no market value in the export (unknown, never 0 €).
+ */
+function positionRate(rateMap: EcbRateMap, yearEnd: string, p: OpenPosition): Decimal | null {
+  return hasNoMarketValue(p) ? null : lookupPositionRate(rateMap, yearEnd, p.currency);
+}
+
 let cachedStatement: Statement | null = null;
 let cachedRateMap: EcbRateMap | null = null;
+let cachedBrokersWithoutHoldings: string[] = [];
+/** Year the section was drawn with. The file uses it, so it matches the screen even if the profile year changes later. */
+let cachedYear: number | null = null;
 
 /** Initialize D-6 section with empty state */
 export function initSectionD6(): void {
+  // Also forget the data behind the last render: after the upload list
+  // changes, a locale switch or the generate button must not bring it back.
+  cachedStatement = null;
+  cachedRateMap = null;
   const container = document.getElementById("d6-content");
   if (!container) return;
   container.innerHTML = `
@@ -41,16 +58,28 @@ export function initSectionD6(): void {
     </div>`;
 }
 
-/** Render D-6 section with processed data */
-export function renderSectionD6(statement: Statement, rateMap: EcbRateMap): void {
+/**
+ * Render D-6 section with processed data.
+ *
+ * `brokersWithoutHoldings` names the brokers whose export has securities
+ * trades but no year-end securities positions (see findMissingHoldings), so
+ * the section can send the user to that broker's year-end statement.
+ */
+export function renderSectionD6(
+  statement: Statement,
+  rateMap: EcbRateMap,
+  brokersWithoutHoldings: string[] = [],
+): void {
   cachedStatement = statement;
   cachedRateMap = rateMap;
+  cachedBrokersWithoutHoldings = brokersWithoutHoldings;
 
   const container = document.getElementById("d6-content");
   if (!container) return;
 
   const profile = getProfile();
   const year = profile.year;
+  cachedYear = year;
   const yearEnd = effectiveYearEnd(year);
 
   const positions = statement.openPositions.filter(
@@ -61,8 +90,14 @@ export function renderSectionD6(statement: Statement, rateMap: EcbRateMap): void
       new Decimal(p.quantity).greaterThan(0),
   );
 
+  const missingNotice = brokersWithoutHoldings.length > 0
+    ? `<div class="banner banner-warning d6-no-holdings">${esc(t("d6.brokers_without_holdings", {
+      brokers: formatBrokerList(brokersWithoutHoldings, getCurrentLocale()),
+    }))}</div>`
+    : "";
+
   if (positions.length === 0) {
-    container.innerHTML = `<p class="muted">${t("d6.no_positions")}</p>`;
+    container.innerHTML = missingNotice || `<p class="muted">${t("d6.no_positions")}</p>`;
     return;
   }
 
@@ -95,6 +130,12 @@ export function renderSectionD6(statement: Statement, rateMap: EcbRateMap): void
     </div>`;
   }
 
+  // Positions must be the holdings at 31 December of the selected year
+  const positionsDate = renderPositionsDateBanner(statement, year);
+  html += positionsDate.html;
+
+  html += missingNotice;
+
   // 10% threshold reminder (Orden ICT/1408/2021)
   html += `<div class="banner banner-warning">${t("d6.no_minimum")}</div>`;
 
@@ -102,7 +143,7 @@ export function renderSectionD6(statement: Statement, rateMap: EcbRateMap): void
   // surfaced via the warning banner below).
   let unvaluedCount = 0;
   const totalValue = positions.reduce((sum, p) => {
-    const rate = lookupPositionRate(rateMap, yearEnd, p.currency);
+    const rate = positionRate(rateMap, yearEnd, p);
     if (rate === null) { unvaluedCount++; return sum; }
     return sum.plus(new Decimal(p.positionValue).mul(rate));
   }, new Decimal(0));
@@ -120,11 +161,11 @@ export function renderSectionD6(statement: Statement, rateMap: EcbRateMap): void
     </tr></thead>
     <tbody>${positions
       .map((p) => {
-        const rate = lookupPositionRate(rateMap, yearEnd, p.currency);
+        const rate = positionRate(rateMap, yearEnd, p);
         const val = rate === null ? "—" : fmtEur(new Decimal(p.positionValue).mul(rate));
         return `<tr>
         <td class="mono">${esc(p.isin)}</td><td>${esc(p.description)}</td>
-        <td>${esc(p.isin.slice(0, 2))}</td><td>${new Decimal(p.quantity).toString()}</td><td>${val}</td>
+        <td>${esc(p.isin.slice(0, 2))}</td><td>${fmtQty(p.quantity)}</td><td>${val}</td>
       </tr>`;
       })
       .join("")}</tbody>
@@ -137,16 +178,17 @@ export function renderSectionD6(statement: Statement, rateMap: EcbRateMap): void
       <h4>${t("d6.rates_title")}</h4>
       <div class="rates-grid">${uniqueCurrencies.map((cur) => {
         const rate = lookupPositionRate(rateMap, yearEnd, cur);
-        return `<span class="rate-item">${esc(cur)}: ${rate === null ? "—" : `${rate.toFixed(4)} €`}</span>`;
+        return `<span class="rate-item">${esc(cur)}: ${rate === null ? "—" : `${fmtEur(rate, 4)} €`}</span>`;
       }).join("")}</div>
     </div>`;
   }
 
   // Generate button
-  html += `<button id="d6-generate-btn">${t("d6.generate_btn")}</button>`;
+  html += `<button id="d6-generate-btn"${positionsDate.blocked ? " disabled" : ""}>${t("d6.generate_btn")}</button>`;
 
-  // AFORIX guide
-  html += renderAforixGuide(positions, rateMap, year, profile);
+  // AFORIX guide. D-6 is filed by typing these values into AFORIX, so the
+  // guide is withheld too when the positions are from another date.
+  if (!positionsDate.blocked) html += renderAforixGuide(positions, rateMap, year, profile);
 
   // Deadline
   html += `<div class="deadline-reminder">${t("d6.deadline")}</div>`;
@@ -213,13 +255,13 @@ function renderAforixGuide(
   // Position fields
   for (let i = 0; i < positions.length; i++) {
     const p = positions[i]!;
-    const rate = lookupPositionRate(rateMap, yearEnd, p.currency);
+    const rate = positionRate(rateMap, yearEnd, p);
     const val = rate === null ? "—" : fmtEur(new Decimal(p.positionValue).mul(rate));
     html += `<p style="margin-top:1rem;font-weight:600">${t("d6.aforix_position_of", { index: String(i + 1), total: String(positions.length) })}</p>`;
     html += aforixField(t("table.isin"), p.isin);
     html += aforixField("Denominación", p.description);
     html += aforixField("País emisor", p.isin.slice(0, 2).toUpperCase());
-    html += aforixField("Nº títulos", new Decimal(p.quantity).toString());
+    html += aforixField("Nº títulos", fmtQty(p.quantity));
     html += aforixField("Valor EUR", val);
     html += aforixField(t("table.currency"), p.currency);
   }
@@ -237,7 +279,7 @@ function aforixField(label: string, value: string): string {
 }
 
 async function generateD6File(): Promise<void> {
-  if (!cachedStatement || !cachedRateMap) return;
+  if (!cachedStatement || !cachedRateMap || cachedYear === null) return;
   if (!isProfileComplete()) {
     const container = document.getElementById("d6-content");
     if (container && !container.querySelector(".profile-required")) {
@@ -256,7 +298,7 @@ async function generateD6File(): Promise<void> {
   const report = generateD6Report(
     cachedStatement.openPositions,
     cachedRateMap,
-    profile.year,
+    cachedYear,
     fullName || "CONTRIBUYENTE",
     profile.nif || "00000000T",
   );
@@ -265,7 +307,7 @@ async function generateD6File(): Promise<void> {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `d6_guia_${profile.year}.json`;
+  a.download = `d6_guia_${cachedYear}.json`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -273,6 +315,6 @@ async function generateD6File(): Promise<void> {
 /** Re-render if data was previously cached (for locale changes) */
 export function rerenderSectionD6(): void {
   if (cachedStatement && cachedRateMap) {
-    renderSectionD6(cachedStatement, cachedRateMap);
+    renderSectionD6(cachedStatement, cachedRateMap, cachedBrokersWithoutHoldings);
   }
 }

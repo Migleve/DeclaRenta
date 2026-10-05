@@ -15,7 +15,7 @@
  *
  *  2. "Otros elementos patrimoniales" (página 17 I) — options (Art. 37.1.m),
  *     crypto, non-listed funds, and foreign-currency gains (Art. 33.1):
- *       1626 = Tipo de elemento patrimonial. Clave (use 5 = otros elementos no afectos)
+ *       1626 = Tipo de elemento patrimonial. Clave (use 4 = otros elementos no afectos; 5 is afectos)
  *       1633 = Valor de transmisión
  *       1637 = Valor de adquisición
  *       1640 = Ganancia patrimonial obtenida ([1633] - [1637] positiva)
@@ -44,7 +44,7 @@ import type { DividendEntry, FifoDisposal, IssuerDividendGroup, TaxSummary } fro
  * STK as listed and everything else as "otros elementos". This errs toward the
  * conservative side (both blocks feed the same savings base at the same rate, so
  * the *tax due* is identical — only the box placement differs). Revisit if a
- * listing flag becomes available. See docs.html FAQ for the user-facing note.
+ * listing flag becomes available. The user-facing note is in docs/casillas.md.
  */
 const LISTED_SHARE_CATEGORIES: ReadonlySet<string> = new Set(["STK"]);
 

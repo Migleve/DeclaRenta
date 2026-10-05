@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import Decimal from "decimal.js";
 import { parseEtoroXlsx, detectEtoroXlsx } from "../../src/parsers/etoro.js";
 import * as XLSX from "xlsx";
+import { FifoEngine } from "../../src/engine/fifo.js";
+import type { EcbRateMap } from "../../src/types/ecb.js";
 
 // ---------------------------------------------------------------------------
 // Shared constants
@@ -116,6 +118,43 @@ describe("eToro XLSX parsing", () => {
 
       const result = await parseEtoroXlsx(data);
       expect(result.trades).toHaveLength(0); // crypto filtered out
+      // ...but never silently: the skipped position is reported.
+      const msg = (result.parserMessages ?? []).find((m) => m.id === "etoro.closed_types_skipped");
+      expect(msg).toBeDefined();
+      expect(msg!.severity).toBe("warning");
+      expect(msg!.context?.count).toBe("1");
+      expect(msg!.context?.types).toBe("Crypto (1)");
+    });
+
+    it("should skip and report crypto types whose label contains 'currenc' or 'divisa'", async () => {
+      for (const type of ["Cryptocurrencies", "Criptodivisas"]) {
+        const data = buildEtoroWorkbook({
+          closedPositions: [
+            CLOSED_POSITIONS_HEADER,
+            ["Buy BTC", "500", "0.01", "50000", "55000", "50", "01/01/2025", "01/03/2025", type, "1", ""],
+          ],
+        });
+
+        const result = await parseEtoroXlsx(data);
+        expect(result.trades, type).toHaveLength(0);
+        const msgs = (result.parserMessages ?? []).filter((m) => m.id === "etoro.closed_types_skipped");
+        expect(msgs, type).toHaveLength(1);
+        expect(msgs[0]!.context?.types).toBe(`${type} (1)`);
+      }
+    });
+
+    it("should parse Currencies positions as CFD", async () => {
+      const data = buildEtoroWorkbook({
+        closedPositions: [
+          CLOSED_POSITIONS_HEADER,
+          ["Buy EURUSD", "1000", "1000", "1.08", "1.09", "10", "01/04/2025", "01/05/2025", "Currencies", "1", ""],
+        ],
+      });
+
+      const result = await parseEtoroXlsx(data);
+      expect(result.trades).toHaveLength(2);
+      expect(result.trades.every((t) => t.assetCategory === "CFD")).toBe(true);
+      expect(result.parserMessages ?? []).toEqual([]);
     });
 
     it("should handle multiple trades", async () => {
@@ -474,7 +513,7 @@ describe("eToro XLSX parsing", () => {
           // ComDif(USD), DifMercado(USD), Ganancias(USD), Ganancias(EUR), TipoCambioAp, TipoCambioCi,
           // TasaApertura, TasaCierre, TP, SL, Comisiones, Copiado, Tipo, ISIN, Notas
           ["123", "Apple Inc (AAPL)", "Long", "1000", "5.5", "15/03/2024 09:30:00", "20/09/2025 14:00:00",
-           "1", "0", "-0.5", "100", "91.50", "1.08", "1.10", "180", "200", "0", "0", "0", "-", "Acciones", "US0378331005", ""],
+           "1", "0", "-0.5", "100", "91.50", "1", "1", "180", "200", "0", "0", "0", "-", "Acciones", "US0378331005", ""],
         ],
       });
 
@@ -485,7 +524,7 @@ describe("eToro XLSX parsing", () => {
       expect(buy.buySell).toBe("BUY");
       expect(buy.symbol).toBe("Apple Inc (AAPL)");
       expect(buy.isin).toBe("US0378331005");
-      expect(buy.currency).toBe("EUR");
+      expect(buy.currency).toBe("USD");
       expect(buy.quantity).toBe("5.5");
       expect(buy.tradePrice).toBe("180");
       expect(buy.tradeDate).toBe("20240315");
@@ -494,8 +533,8 @@ describe("eToro XLSX parsing", () => {
       expect(sell.buySell).toBe("SELL");
       expect(sell.tradeDate).toBe("20250920");
       expect(sell.tradePrice).toBe("200");
-      expect(sell.fifoPnlRealized).toBe("91.50");
-      expect(sell.currency).toBe("EUR");
+      expect(sell.fifoPnlRealized).toBe("100");
+      expect(sell.currency).toBe("USD");
     });
 
     it("should parse Short positions with inverted buy/sell legs", async () => {
@@ -512,6 +551,46 @@ describe("eToro XLSX parsing", () => {
       // Short: opening leg is SELL, closing leg is BUY
       expect(result.trades[0]!.buySell).toBe("SELL");
       expect(result.trades[1]!.buySell).toBe("BUY");
+    });
+
+    it("should parse accented Spanish types 'Índices', 'Materias primas' and 'Divisas' as CFD", async () => {
+      const data = buildSpanishWorkbook({
+        closedPositions: [
+          SPANISH_CLOSED_HEADER,
+          ["1", "SPX500", "Long", "1000", "2", "01/02/2025 10:00:00", "15/06/2025 16:00:00",
+           "5", "0", "0", "50", "45", "1", "1", "5000", "5025", "0", "0", "0", "-", "Índices", "", ""],
+          ["2", "GOLD", "Long", "1000", "1", "01/02/2025 10:00:00", "15/06/2025 16:00:00",
+           "1", "0", "0", "20", "18", "1", "1", "2000", "2020", "0", "0", "0", "-", "Materias primas", "", ""],
+          ["3", "EURUSD", "Short", "1000", "1000", "01/02/2025 10:00:00", "15/06/2025 16:00:00",
+           "1", "0", "0", "10", "9", "1", "1", "1.08", "1.07", "0", "0", "0", "-", "Divisas", "", ""],
+        ],
+      });
+
+      const result = await parseEtoroXlsx(data);
+      expect(result.trades).toHaveLength(6);
+      expect(result.trades.every((t) => t.assetCategory === "CFD")).toBe(true);
+      expect((result.parserMessages ?? []).some((m) => m.id === "etoro.closed_types_skipped")).toBe(false);
+    });
+
+    it("should report Spanish 'Cripto' positions it skips, with their type and count", async () => {
+      const data = buildSpanishWorkbook({
+        closedPositions: [
+          SPANISH_CLOSED_HEADER,
+          ["1", "Bitcoin", "Long", "500", "0.01", "01/01/2025 10:00:00", "01/03/2025 10:00:00",
+           "1", "0", "0", "50", "45", "1", "1", "50000", "55000", "0", "0", "0", "-", "Cripto", "", ""],
+          ["2", "Ethereum", "Long", "300", "0.1", "01/01/2025 10:00:00", "01/03/2025 10:00:00",
+           "1", "0", "0", "30", "27", "1", "1", "3000", "3300", "0", "0", "0", "-", "Cripto", "", ""],
+          ["3", "Apple Inc (AAPL)", "Long", "1000", "5", "01/01/2025 10:00:00", "01/03/2025 10:00:00",
+           "1", "0", "0", "100", "91", "1", "1", "180", "200", "0", "0", "0", "-", "Acciones", "US0378331005", ""],
+        ],
+      });
+
+      const result = await parseEtoroXlsx(data);
+      expect(result.trades).toHaveLength(2); // only Apple
+      const msg = (result.parserMessages ?? []).find((m) => m.id === "etoro.closed_types_skipped");
+      expect(msg).toBeDefined();
+      expect(msg!.context?.count).toBe("2");
+      expect(msg!.context?.types).toBe("Cripto (2)");
     });
 
     it("should build a PROFITABLE short with open-high/close-low legs and O/C indicators", async () => {
@@ -583,6 +662,44 @@ describe("eToro XLSX parsing", () => {
       // Proceeds = amount + profit = 83.11 + (-14.29) = 68.82
       expect(parseFloat(sell.proceeds)).toBeCloseTo(68.82, 2);
       expect(sell.fifoPnlRealized).toBe("-14.29");
+      // FX rate 1.07 (not 1): a EUR-quoted Xetra stock, so the legs stay EUR
+      expect(sell.currency).toBe("EUR");
+    });
+
+    it("should convert a Spanish-layout trade from USD at the ECB rate, like the English layout", async () => {
+      // Same trade in both layouts: 10 AAPL, open 100 USD, close 120 USD.
+      // Tipo de cambio (USD) = 1 marks a USD-quoted instrument; the Ganancias (EUR)
+      // column must not turn its legs into EUR, or FIFO skips the ECB conversion.
+      const es = await parseEtoroXlsx(buildSpanishWorkbook({
+        closedPositions: [
+          SPANISH_CLOSED_HEADER,
+          ["321", "Apple Inc (AAPL)", "Long", "1000", "10", "15/03/2025 09:30:00", "20/09/2025 14:00:00",
+           "1", "0", "0", "200", "180", "1", "1", "100", "120", "0", "0", "0", "-", "Acciones", "US0378331005", ""],
+        ],
+      }));
+      const en = await parseEtoroXlsx(buildEtoroWorkbook({
+        closedPositions: [
+          CLOSED_POSITIONS_HEADER,
+          ["Buy AAPL", "1000", "10", "100", "120", "200", "15/03/2025 09:30:00", "20/09/2025 14:00:00", "Stocks", "1", "US0378331005"],
+        ],
+      }));
+
+      const rates: EcbRateMap = new Map([
+        ["2025-03-15", new Map([["USD", "0.9"]])],
+        ["2025-09-20", new Map([["USD", "0.9"]])],
+      ]);
+      const disposalOf = (trades: typeof es.trades) => {
+        const disposals = new FifoEngine().processTrades(trades, rates);
+        expect(disposals).toHaveLength(1);
+        const d = disposals[0]!;
+        return { gain: d.gainLossEur.toFixed(2), proceeds: d.proceedsEur.toFixed(2), cost: d.costBasisEur.toFixed(2) };
+      };
+
+      expect(es.trades.map((t) => t.currency)).toEqual(["USD", "USD"]);
+      expect(en.trades.map((t) => t.currency)).toEqual(["USD", "USD"]);
+      const expected = { gain: "180.00", proceeds: "1080.00", cost: "900.00" };
+      expect(disposalOf(es.trades)).toEqual(expected);
+      expect(disposalOf(en.trades)).toEqual(expected);
     });
 
     it("should use EUR dividend columns when available", async () => {

@@ -38,6 +38,8 @@ const OPEN_RATE_HEADERS = ["open rate", "tipo de apertura", "open price", "tasa 
 const CLOSE_RATE_HEADERS = ["close rate", "tipo de cierre", "close price", "tasa de cierre"];
 const PROFIT_HEADERS = ["profit", "profit(usd)", "ganancia", "ganancias (usd)", "p/l"];
 const PROFIT_EUR_HEADERS = ["profit(eur)", "ganancias (eur)"];
+// Instrument currency → USD rate at open (1 for USD-quoted instruments)
+const FX_OPEN_HEADERS = ["tipo de cambio de apertura (usd)"];
 const OPEN_DATE_HEADERS = ["open date", "fecha de apertura"];
 const CLOSE_DATE_HEADERS = ["close date", "fecha de cierre"];
 const TYPE_HEADERS = ["type", "tipo"];
@@ -123,6 +125,7 @@ function parseClosedPositions(
   const closeRateCol = findColumn(headers, CLOSE_RATE_HEADERS);
   const profitCol = findColumn(headers, PROFIT_HEADERS);
   const profitEurCol = findColumn(headers, PROFIT_EUR_HEADERS);
+  const fxOpenCol = findColumn(headers, FX_OPEN_HEADERS);
   const openDateCol = findColumn(headers, OPEN_DATE_HEADERS);
   const closeDateCol = findColumn(headers, CLOSE_DATE_HEADERS);
   const typeCol = findColumn(headers, TYPE_HEADERS);
@@ -150,6 +153,8 @@ function parseClosedPositions(
   let skippedDataRows = 0;
   // Count rows whose Long/Short direction value was non-empty but unrecognized.
   let unrecognizedDirection = 0;
+  // Rows skipped because their Type is unsupported (e.g. crypto), per raw type.
+  const skippedTypes = new Map<string, number>();
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i]!;
@@ -157,18 +162,32 @@ function parseClosedPositions(
 
     // Determine asset category from type and leverage
     const leverage = leverageCol >= 0 ? (row[leverageCol] ?? "").trim() : "1";
-    const rowType = typeCol >= 0 ? (row[typeCol] ?? "").toLowerCase().trim() : "";
+    // Accents stripped so the Spanish export's "Índices" matches like "Indices".
+    const rowType = typeCol >= 0
+      ? (row[typeCol] ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim()
+      : "";
 
-    // Skip unknown/unsupported types (e.g. crypto on eToro — use dedicated crypto parsers)
-    if (rowType && !rowType.includes("stock") && !rowType.includes("etf") &&
-        !rowType.includes("accion") && !rowType.includes("cfd") &&
-        !rowType.includes("index") && !rowType.includes("indice") &&
-        !rowType.includes("commodit")) continue;
+    // Crypto is checked first: labels like "Cryptocurrencies" or "Criptodivisas"
+    // contain "currenc"/"divisa" and would otherwise be taken as currency CFDs.
+    const isCryptoType = rowType.includes("crypt") || rowType.includes("cripto");
 
-    // CFD: leverage > 1 OR type explicitly says "cfd" OR commodity (always derivative on eToro)
+    // Commodities and currencies are always derivatives (CFD) on eToro.
+    const isCfdType = !isCryptoType && (rowType.includes("cfd") || rowType.includes("commodit") ||
+      rowType.includes("materia") || rowType.includes("currenc") || rowType.includes("divisa"));
+
+    // Skip unknown/unsupported types (e.g. crypto on eToro is not supported),
+    // counted per type so the user is told what was left out.
+    if (rowType && !isCfdType && !rowType.includes("stock") && !rowType.includes("etf") &&
+        !rowType.includes("accion") && !rowType.includes("index") && !rowType.includes("indice")) {
+      const rawType = (row[typeCol] ?? "").trim();
+      skippedTypes.set(rawType, (skippedTypes.get(rawType) ?? 0) + 1);
+      continue;
+    }
+
+    // CFD: leverage > 1 OR a CFD type (explicit CFD, commodity, currency)
     // Strip non-numeric prefixes (e.g. "x5", "X10") before parsing
     const leverageNum = parseFloat(leverage.replace(/^[xX]/, ""));
-    const isCfd = (!isNaN(leverageNum) && leverageNum > 1) || rowType.includes("cfd") || rowType.includes("commodit");
+    const isCfd = (!isNaN(leverageNum) && leverageNum > 1) || isCfdType;
     const assetCat = isCfd ? "CFD" as const : "STK" as const;
 
     // Two eToro formats:
@@ -214,12 +233,19 @@ function parseClosedPositions(
     const openRate = openRateCol >= 0 ? (row[openRateCol] ?? "0").trim() : "0";
     const closeRate = closeRateCol >= 0 ? (row[closeRateCol] ?? "0").trim() : "0";
     const amount = amountCol >= 0 ? (row[amountCol] ?? "0").trim() : "0";
-    // Prefer EUR profit if available (Spanish export has both USD and EUR)
-    const profitRaw = profitEurCol >= 0
+    // Open/close rates are quoted in the instrument's currency. eToro's FX rate
+    // column (instrument → USD) is 1 for a USD-quoted instrument, so only a rate
+    // other than 1 marks a non-USD one, which the Spanish export values in EUR.
+    // Without that column the legs stay USD, as in the English export; a EUR
+    // profit column alone never makes USD prices EUR (FIFO would skip the ECB rate).
+    const fxOpen = fxOpenCol >= 0 ? toFiniteDecimal(row[fxOpenCol] ?? "") : new Decimal(0);
+    const currency = fxOpen.greaterThan(0) && !fxOpen.eq(1) && profitEurCol >= 0 ? "EUR" : "USD";
+    // Take the profit in the legs' currency (Spanish export has both USD and EUR)
+    const profitRaw = currency === "EUR"
       ? (row[profitEurCol] ?? "0").trim()
-      : profitCol >= 0 ? (row[profitCol] ?? "0").trim() : "0";
+      : profitCol >= 0 ? (row[profitCol] ?? "0").trim()
+      : profitEurCol >= 0 ? (row[profitEurCol] ?? "0").trim() : "0";
     const profit = parseNumber(profitRaw);
-    const currency = profitEurCol >= 0 && (row[profitEurCol] ?? "").trim() ? "EUR" : "USD";
     const openDate = openDateCol >= 0 ? parseEtoroDate(row[openDateCol] ?? "") : "";
     const closeDate = closeDateCol >= 0 ? parseEtoroDate(row[closeDateCol] ?? "") : "";
 
@@ -305,6 +331,18 @@ function parseClosedPositions(
       message: `Se ha(n) omitido ${skippedDataRows} fila(s) de "Posiciones cerradas" de eToro con datos no interpretables (acción, símbolo o unidades inválidos).`,
       hint: "eToro cambia el formato de exportación; vuelve a descargar el informe XLSX completo de la cuenta. Si faltan operaciones, revisa que las columnas de acción y unidades estén presentes.",
       context: { count: String(skippedDataRows) },
+    });
+  }
+
+  if (skippedTypes.size > 0) {
+    const skippedTypeCount = [...skippedTypes.values()].reduce((a, b) => a + b, 0);
+    const types = [...skippedTypes].map(([type, n]) => `${type} (${n})`).join(", ");
+    parserMessages.push({
+      id: "etoro.closed_types_skipped",
+      severity: "warning",
+      message: `Se ha(n) omitido ${skippedTypeCount} posición(es) cerrada(s) de eToro de un tipo no soportado: ${types}.`,
+      hint: "DeclaRenta todavía no importa estos tipos de posición de eToro (p. ej. criptomonedas). Su ganancia o pérdida no está incluida en el cálculo: añádela a mano en tu declaración con el importe invertido y el beneficio que muestra eToro.",
+      context: { count: String(skippedTypeCount), types },
     });
   }
 

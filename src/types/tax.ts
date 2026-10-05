@@ -113,6 +113,11 @@ export interface FifoDisposal {
   symbol: string;
   description: string;
   sellDate: string;
+  /**
+   * Cash settlement date of the sale, when the trade carries one. The FX engine
+   * dates the sale's unpark here, on the same axis as the buy's park.
+   */
+  settlementDate?: string;
   acquireDate: string;
   quantity: Decimal;
   /**
@@ -168,6 +173,12 @@ export interface FifoDisposal {
    * the amount added BACK to the deductible base (deferred, not deducted now).
    */
   blockedLossEur: Decimal;
+  /**
+   * Display only: the YYYY-MM-DD dates of the homogeneous purchases inside the
+   * anti-churning window that absorbed this disposal's loss (sorted, unique).
+   * Set by detectWashSales only when `blockedLossEur > 0`. Never used for tax math.
+   */
+  washSaleRepurchaseDates?: string[];
   /**
    * Prior deferred (blocked) loss RELEASED because this disposal sold shares that
    * were the homogeneous repurchase which previously blocked an earlier loss
@@ -267,10 +278,28 @@ export interface GeneralGainEntry {
   ecbRate: Decimal;
 }
 
+/**
+ * The profile settings a report was computed with. They change the figures, so
+ * the Results header and the CSV/PDF exports print them next to the numbers.
+ */
+export interface ReportSettings {
+  /** Monodivisa mode: the FX engine is off (`ReportOptions.skipFx`). */
+  monodivisa: boolean;
+  /** Broker auto-conversions (AFx/FXCONV) are processed (`ReportOptions.trackAutoConvert`). */
+  trackAutoConvert: boolean;
+  /** Number of account holders the amounts are split between. */
+  titulares: number;
+}
+
 /** Aggregated results for Modelo 100 casillas */
 export interface TaxSummary {
   /** Tax year */
   year: number;
+  /**
+   * Settings used to compute this report. Absent on reports built before the
+   * field existed (e.g. ones saved for the year comparison).
+   */
+  settings?: ReportSettings;
   /** @deprecated Use `messages` for severity-aware rendering */
   warnings: string[];
   /** Structured three-tier messages (error/warning/info) */
@@ -363,8 +392,8 @@ export interface TaxSummary {
   doubleTaxation: {
     /** Casilla 0588: Deducción */
     deduction: Decimal;
-    /** Breakdown by country */
-    byCountry: Record<string, { taxPaid: Decimal; deductionAllowed: Decimal }>;
+    /** Breakdown by country (only foreign countries with tax withheld; never ES) */
+    byCountry: Record<string, { grossIncome: Decimal; taxPaid: Decimal; deductionAllowed: Decimal }>;
   };
 
   /** FX gains: Ganancias/pérdidas por transmisión de moneda extranjera (Casillas 1633/1637) */
@@ -400,6 +429,13 @@ export interface TaxSummary {
    * `dispose` then realizes.)
    */
   fxTrace?: FxTraceEvent[];
+
+  /**
+   * Long lots still held at 31 December of the declaration year, keyed like the
+   * FIFO queues (ISIN, else symbol). Modelo 720 writes one record per
+   * acquisition date from them (fecha de incorporación, 415-422).
+   */
+  yearEndLots?: Map<string, Lot[]>;
 }
 
 /** A single lot in the FX FIFO queue (Art. 33.1 LIRPF) */

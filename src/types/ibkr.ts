@@ -31,6 +31,20 @@ export interface FlexStatement {
    * price oracle. Lower precedence than ECB rates and explicit user manual rates.
    */
   manualRateHints?: import("./tax.js").ManualRateQuote[];
+  /**
+   * Open positions and cash balances of each merged file, with that file's
+   * period end. Set by `mergeStatement` so `yearEndHoldings` can keep only the
+   * holdings of the files that end on 31 December of the declared year.
+   */
+  holdingsBySource?: HoldingsSource[];
+}
+
+/** The year-end holdings of one merged file, dated to that file's period end. */
+export interface HoldingsSource {
+  accountId: string;
+  toDate: string;
+  openPositions: OpenPosition[];
+  cashBalances: CashBalance[];
 }
 
 /**
@@ -46,6 +60,10 @@ export interface OrderLeg {
   /** ISIN of the traded security, for diagnostics. */
   isin: string;
   currency: string;
+  /** Booking date (YYYYMMDD), used to pair the fills of a partially executed order. */
+  tradeDate: string;
+  /** Booking number of the cash leg (Flatex TA-Nr.), used to drop the same leg uploaded twice. */
+  bookingId?: string;
 }
 
 export interface Trade {
@@ -59,6 +77,12 @@ export interface Trade {
   assetCategory: AssetCategory;
   currency: string;
   tradeDate: string;
+  /**
+   * Time of day of the execution ("HH:MM:SS"), when the export has one. Only
+   * orders trades of the same day, so FIFO consumes the unit bought first
+   * (Art. 37.2 LIRPF). Absent → the parser's row order is kept.
+   */
+  tradeTime?: string;
   settlementDate: string;
   quantity: string;
   tradePrice: string;
@@ -188,6 +212,11 @@ export interface OpenPosition {
   positionValue: string;
   fifoPnlUnrealized: string;
   fxRateToBase: string;
+  /**
+   * Country where the broker keeps the securities in custody (ISO alpha-2).
+   * Modelo 720 writes it in positions 129-130 of a clave V record.
+   */
+  custodianCountry?: string;
 }
 
 export interface SecurityInfo {
@@ -225,6 +254,8 @@ export interface OptionExercise {
   accountId: string;
   /** IBKR contract ID — matches Trade.conid for lot key consistency */
   conid?: string;
+  /** OPT, FOP or FSFOP — the option lot is keyed by it (lotKey), like Trade.assetCategory */
+  assetCategory?: AssetCategory;
   symbol: string;
   description: string;
   isin: string;

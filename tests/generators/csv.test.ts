@@ -61,6 +61,7 @@ function makeReport(overrides?: Partial<TaxSummary>): TaxSummary {
       acquisitionValue: new Decimal(800),
       netGainLoss: new Decimal(200),
       blockedLosses: new Decimal(0),
+      reintegratedLosses: new Decimal(0),
       disposals: [
         {
           isin: "US0378331005",
@@ -78,6 +79,8 @@ function makeReport(overrides?: Partial<TaxSummary>): TaxSummary {
           sellEcbRate: new Decimal("0.91"),
           acquireEcbRate: new Decimal("0.92"),
           washSaleBlocked: false,
+          blockedLossEur: new Decimal(0),
+          reintegratedLossEur: new Decimal(0),
         },
       ],
     },
@@ -212,6 +215,7 @@ describe("formatCsv", () => {
         acquisitionValue: new Decimal(0),
         netGainLoss: new Decimal(0),
         blockedLosses: new Decimal(0),
+        reintegratedLosses: new Decimal(0),
         disposals: [],
       },
       fxGains: {
@@ -300,5 +304,147 @@ describe("formatCsv", () => {
     // Should still have headers but no data rows
     const lines = csv.split("\n").filter((l) => l.startsWith("US"));
     expect(lines).toHaveLength(0);
+  });
+
+  it("carries a partial anti-churning block into the row and the summary", () => {
+    // 400 of a 1000 EUR loss deferred; 250 of an earlier deferral released.
+    const report = makeReport();
+    const d = report.capitalGains.disposals[0]!;
+    d.proceedsEur = new Decimal(3000);
+    d.costBasisEur = new Decimal(4000);
+    d.gainLossEur = new Decimal(-1000);
+    d.washSaleBlocked = true;
+    d.blockedLossEur = new Decimal(400);
+    report.capitalGains.blockedLosses = new Decimal(400);
+    report.capitalGains.reintegratedLosses = new Decimal(250);
+    const lines = formatCsv(report).split("\n");
+
+    const header = lines.find((l) => l.startsWith("ISIN,Simbolo,Descripcion"))!.split(",");
+    const row = lines.find((l) => l.startsWith("US0378331005,AAPL,APPLE INC"))!.split(",");
+    expect(header[header.length - 1]).toBe("Perdida_Bloqueada_EUR");
+    expect(row).toHaveLength(header.length);
+    expect(row[14]).toBe("SI");
+    expect(row[row.length - 1]).toBe("400.00");
+
+    expect(lines).toContain("—,Perdidas bloqueadas antichurning (Art. 33.5.f — informativo),400.00");
+    expect(lines).toContain("—,Perdidas reintegradas antichurning (Art. 33.5.f — informativo),250.00");
+  });
+
+  it("writes 0.00 in the blocked column and no anti-churning summary rows when nothing is blocked", () => {
+    const lines = formatCsv(makeReport()).split("\n");
+    const row = lines.find((l) => l.startsWith("US0378331005,AAPL,APPLE INC"))!.split(",");
+    expect(row[row.length - 1]).toBe("0.00");
+    expect(lines.some((l) => /antichurning/i.test(l) && l.startsWith("—,"))).toBe(false);
+  });
+});
+
+describe("formatCsv settings section", () => {
+  it("opens with the settings the figures were computed with", () => {
+    const csv = formatCsv(makeReport({ settings: { monodivisa: true, trackAutoConvert: false, titulares: 2 } }));
+    const lines = csv.split("\n");
+    expect(lines.slice(0, 6)).toEqual([
+      "# AJUSTES DEL CALCULO",
+      "Ajuste,Valor",
+      "Monodivisa,SI",
+      "Titulares,2",
+      "Procesar_Autoconversiones,NO",
+      "",
+    ]);
+    expect(lines[6]).toBe("# GANANCIAS PATRIMONIALES");
+  });
+
+  it("uses the Excel separator in the settings section too", () => {
+    const csv = formatCsv(makeReport({ settings: { monodivisa: true, trackAutoConvert: false, titulares: 2 } }), "excel-es");
+    expect(csv.split("\n").slice(1, 5)).toEqual(["Ajuste;Valor", "Monodivisa;SI", "Titulares;2", "Procesar_Autoconversiones;NO"]);
+  });
+
+  it("omits the section for a report without settings", () => {
+    const csv = formatCsv(makeReport());
+    expect(csv).not.toContain("# AJUSTES DEL CALCULO");
+    expect(csv.split("\n")[0]).toBe("# GANANCIAS PATRIMONIALES");
+  });
+});
+
+describe("formatCsv — excel-es dialect", () => {
+  it("keeps the standard dialect as the default", () => {
+    const report = makeReport();
+    expect(formatCsv(report)).toBe(formatCsv(report, "standard"));
+  });
+
+  it("writes an option strike with a decimal comma too", () => {
+    const report = makeReport();
+    report.capitalGains.disposals[0]!.strike = "182.5";
+    const cols = formatCsv(report, "excel-es").split("\n").find((l) => l.startsWith("US0378331005;AAPL;APPLE INC;STK"))!.split(";");
+    expect(cols[17]).toBe("182,5");
+    // The standard file keeps the broker's dot.
+    const std = formatCsv(report).split("\n").find((l) => l.startsWith("US0378331005,AAPL,APPLE INC,STK"))!.split(",");
+    expect(std[17]).toBe("182.5");
+  });
+
+  it("uses ';' as separator and ',' as decimal mark", () => {
+    const csv = formatCsv(makeReport(), "excel-es");
+    const lines = csv.split("\n");
+
+    const header = lines[lines.indexOf("# GANANCIAS PATRIMONIALES") + 1]!;
+    expect(header.startsWith("ISIN;Simbolo;Descripcion;Categoria;")).toBe(true);
+    expect(header).not.toContain(",");
+
+    const cols = lines.find((l) => l.startsWith("US0378331005;AAPL;APPLE INC;STK"))!.split(";");
+    expect(cols).toHaveLength(21);
+    expect(cols[6]).toBe("10");
+    expect(cols[7]).toBe("800,00");
+    expect(cols[8]).toBe("1000,00");
+    expect(cols[9]).toBe("200,00");
+    expect(cols[10]).toBe("189");
+    expect(cols[12]).toBe("0,920000");
+    expect(cols[13]).toBe("0,910000");
+    expect(cols[20]).toBe("0,00"); // Perdida_Bloqueada_EUR, decimal comma too
+
+    expect(lines).toContain("US0378331005;AAPL;APPLE INC;20250601;50,00;7,50;US;USD");
+    expect(lines).toContain("US0378331005;AAPL;US;1;50,00;7,50;USD");
+    expect(lines).toContain("0029;Dividendos brutos;50,00");
+    expect(lines).toContain("0588;Deduccion doble imposicion;7,50");
+  });
+
+  it("writes negative amounts with a comma decimal", () => {
+    const report = makeReport();
+    report.capitalGains.disposals[0]!.gainLossEur = new Decimal("-123.45");
+    const csv = formatCsv(report, "excel-es");
+    const cols = csv.split("\n").find((l) => l.startsWith("US0378331005;AAPL;APPLE INC;STK"))!.split(";");
+    expect(cols[9]).toBe("-123,45");
+  });
+
+  it("does not quote text that only contains a comma", () => {
+    const report = makeReport();
+    report.capitalGains.disposals[0]!.description = "BERKSHIRE HATHAWAY, CL B";
+    const csv = formatCsv(report, "excel-es");
+    expect(csv).toContain(";BERKSHIRE HATHAWAY, CL B;");
+  });
+
+  it("quotes text that contains a ';'", () => {
+    const report = makeReport();
+    report.capitalGains.disposals[0]!.description = "FOO; BAR";
+    const csv = formatCsv(report, "excel-es");
+    expect(csv).toContain(';"FOO; BAR";');
+  });
+
+  it("keeps formula-injection protection", () => {
+    const report = makeReport();
+    report.capitalGains.disposals[0]!.description = "=HYPERLINK(1)";
+    const csv = formatCsv(report, "excel-es");
+    expect(csv).toContain(";'=HYPERLINK(1);");
+  });
+
+  it("has the same number of lines as the standard dialect", () => {
+    const report = makeReport();
+    expect(formatCsv(report, "excel-es").split("\n")).toHaveLength(formatCsv(report).split("\n").length);
+  });
+});
+
+describe("escapeCsv — separator", () => {
+  it("quotes on the given separator instead of ','", () => {
+    expect(escapeCsv("a;b", ";")).toBe('"a;b"');
+    expect(escapeCsv("a,b", ";")).toBe("a,b");
+    expect(escapeCsv('a"b', ";")).toBe('"a""b"');
   });
 });
